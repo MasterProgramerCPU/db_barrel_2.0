@@ -1,0 +1,30 @@
+#!/bin/bash
+set -e
+
+# Create system user for the service (no login shell, no home)
+if ! getent passwd db-barrel > /dev/null 2>&1; then
+    useradd --system --no-create-home --shell /usr/sbin/nologin db-barrel
+fi
+
+# Create data directory
+mkdir -p /var/lib/db-barrel
+chown db-barrel:db-barrel /var/lib/db-barrel
+
+# Enable and start the service
+systemctl daemon-reload
+systemctl enable db-barrel.service
+
+echo ""
+echo "╔══════════════════════════════════════════════════════════╗"
+echo "║  DB Barrel 2.0 installed successfully!                  ║"
+echo "║                                                         ║"
+echo "║  1. Edit your databases:                                ║"
+echo "║     sudo nano /etc/db-barrel/databases.json             ║"
+echo "║                                                         ║"
+echo "║  2. Start the service:                                  ║"
+echo "║     sudo systemctl start db-barrel                      ║"
+echo "║                                                         ║"
+echo "║  3. Open in browser:                                    ║"
+echo "║     http://localhost:8080                                ║"
+echo "╚══════════════════════════════════════════════════════════╝"
+echo ""

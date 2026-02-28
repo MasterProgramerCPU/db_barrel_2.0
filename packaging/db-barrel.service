@@ -1,0 +1,25 @@
+[Unit]
+Description=DB Barrel 2.0 — Database Schema Introspection Tool
+Documentation=https://github.com/robotelu/db_barrel_2.0
+After=network.target postgresql.service mysql.service mariadb.service
+
+[Service]
+Type=simple
+User=db-barrel
+Group=db-barrel
+ExecStart=/usr/bin/db-barrel -port 8080 -config /etc/db-barrel/databases.json
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=db-barrel
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/
+ReadWritePaths=/var/log
+
+[Install]
+WantedBy=multi-user.target

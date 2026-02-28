@@ -1,0 +1,19 @@
+#!/bin/bash
+set -e
+
+# Clean up after complete removal (not upgrade)
+if [ "$1" = "purge" ]; then
+    # Remove system user
+    if getent passwd db-barrel > /dev/null 2>&1; then
+        userdel db-barrel 2>/dev/null || true
+    fi
+    if getent group db-barrel > /dev/null 2>&1; then
+        groupdel db-barrel 2>/dev/null || true
+    fi
+
+    # Remove data and config
+    rm -rf /var/lib/db-barrel
+    rm -rf /etc/db-barrel
+fi
+
+systemctl daemon-reload

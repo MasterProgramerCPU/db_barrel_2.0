@@ -1,0 +1,13 @@
+Package: db-barrel
+Version: 2.0.0
+Section: database
+Priority: optional
+Architecture: amd64
+Depends: libc6
+Maintainer: robotelu <robotelu@users.noreply.github.com>
+Description: DB Barrel 2.0 — Database Schema Introspection Tool
+ A web-based database introspection tool that connects to PostgreSQL,
+ MySQL, MariaDB, and SQLite databases and displays interactive visual
+ schema diagrams. Configure your databases in /etc/db-barrel/databases.json
+ and access the UI at http://localhost:8080.
+Homepage: https://github.com/robotelu/db_barrel_2.0
