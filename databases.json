@@ -1,0 +1,29 @@
+{
+    "databases": [
+        {
+            "name": "SQLiteTest",
+            "driver": "sqlite",
+            "path": "testdata/test_barrel.db"
+        },
+        {
+            "name": "PostgresTest",
+            "driver": "postgresql",
+            "host": "localhost",
+            "port": 5432,
+            "user": "postgres",
+            "password": "loader",
+            "database": "test_barrel_postgres",
+            "sslMode": "disable"
+        },
+        {
+            "name": "MariaDBTest",
+            "driver": "mariadb",
+            "host": "localhost",
+            "port": 3306,
+            "user": "barrel_app",
+            "password": "loader",
+            "database": "test_barrel",
+            "sslMode": "disable"
+        }
+    ]
+}

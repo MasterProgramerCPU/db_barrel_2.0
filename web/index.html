@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="DB Barrel 2.0 — Database schema introspection tool">
+    <title>DB Barrel 2.0</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Tahoma&family=Trebuchet+MS&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <!-- XP-style title bar -->
+    <header id="app-header">
+        <div class="header-left">
+            <div id="logo-home" class="logo-area">
+                <img src="svg/barrel.svg" alt="DB Barrel" class="logo-icon">
+                <h1 class="title-text">DB Barrel 2.0</h1>
+            </div>
+        </div>
+        <div class="header-center">
+            <span id="current-db-name" class="current-db-label" hidden></span>
+        </div>
+        <div class="header-right">
+            <span id="db-count-badge" class="count-badge"></span>
+        </div>
+    </header>
+
+    <!-- Screen 1: Database Galaxy -->
+    <div id="galaxy-screen" class="screen">
+        <svg id="galaxy-svg"></svg>
+    </div>
+
+    <!-- Screen 2: Schema View -->
+    <div id="schema-screen" class="screen" hidden>
+        <svg id="schema-svg"></svg>
+    </div>
+
+    <!-- Floating Detail Window (XP dialog style) -->
+    <div id="detail-overlay" class="xp-dialog" hidden>
+        <div class="xp-dialog-titlebar">
+            <span id="detail-table-name" class="xp-dialog-title"></span>
+            <button id="close-detail" class="xp-close-btn">✕</button>
+        </div>
+        <div id="detail-content" class="xp-dialog-body"></div>
+    </div>
+
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script src="app.js"></script>
+</body>
+
+</html>
