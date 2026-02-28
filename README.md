@@ -22,10 +22,103 @@ DB Barrel connects to your PostgreSQL, MySQL, MariaDB, and SQLite databases and 
 ## Screenshots
 
 ### Database Gallery
-Floating, draggable cards for each registered database. Click a card to explore its schema.
+Floating, draggable cards for each registered database with official logos. Click any card to explore its schema.
+
+![Database Gallery — landing page showing connected databases](docs/gallery.png)
 
 ### Schema View
-Interactive ER diagram with color-coded table headers, PK/FK icons, and relationship arrows. Click any table for a detail overlay showing columns and foreign keys.
+Interactive ER diagram with color-coded table headers, PK/FK icons, and curved FK relationship arrows. Click any table for a detail overlay.
+
+![Schema View — interactive ER diagram for SQLiteTest](docs/schema.png)
+
+---
+
+## Architecture
+
+### System Overview
+
+```mermaid
+graph TB
+    subgraph "Client (Browser)"
+        UI["D3.js Frontend<br/>HTML / CSS / JS"]
+    end
+
+    subgraph "DB Barrel Server (Go)"
+        WEB["Static File Server<br/>(embedded via go:embed)"]
+        API["REST API<br/>/api/databases<br/>/api/databases/:id/schema"]
+        CFG["Config Loader<br/>(databases.json)"]
+        DRV["Driver Abstraction"]
+    end
+
+    subgraph "Databases"
+        PG[(PostgreSQL)]
+        MY[(MySQL)]
+        MA[(MariaDB)]
+        SQ[(SQLite)]
+    end
+
+    UI <-->|HTTP| API
+    UI <-->|HTTP| WEB
+    CFG --> DRV
+    DRV -->|lib/pq| PG
+    DRV -->|go-sql-driver| MY
+    DRV -->|go-sql-driver| MA
+    DRV -->|go-sqlite3| SQ
+    API --> DRV
+```
+
+### Request Flow
+
+```mermaid
+sequenceDiagram
+    participant B as Browser
+    participant S as DB Barrel Server
+    participant D as Database
+
+    Note over S,D: Startup (one-time)
+    S->>S: Load databases.json
+    loop For each database
+        S->>D: Connect & introspect schema
+        D-->>S: Tables, columns, FKs
+        S->>S: Cache schema in memory
+    end
+
+    Note over B,S: Runtime
+    B->>S: GET /
+    S-->>B: index.html + app.js + style.css
+
+    B->>S: GET /api/databases
+    S-->>B: [{id, name, driver, status, tableCount}]
+
+    B->>S: GET /api/databases/0/schema
+    S-->>B: {tables: [{name, columns, foreignKeys}]}
+
+    Note over B: D3.js renders force-directed<br/>ER diagram in the browser
+```
+
+### Package Layout
+
+```mermaid
+graph LR
+    subgraph "internal/"
+        config["config/<br/>Config loading<br/>DSN building"]
+        driver["driver/<br/>Driver interface<br/>postgres.go<br/>mysql.go<br/>sqlite.go"]
+        api["api/<br/>HTTP server<br/>REST handlers"]
+    end
+
+    subgraph "web/ (embedded)"
+        html["index.html"]
+        css["style.css"]
+        js["app.js"]
+        svg["svg/ logos"]
+    end
+
+    main["main.go"] --> config
+    main --> driver
+    main --> api
+    api --> driver
+    config --> driver
+```
 
 ---
 
