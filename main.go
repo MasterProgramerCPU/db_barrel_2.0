@@ -33,6 +33,7 @@ func main() {
 
 	// Introspect all databases at startup
 	databases, schemas := introspectAll(cfg)
+	replication := buildReplication(cfg)
 
 	// Prepare web filesystem
 	webFS, err := fs.Sub(webContent, "web")
@@ -40,7 +41,21 @@ func main() {
 		log.Fatalf("failed to create sub filesystem: %v", err)
 	}
 
-	srv := api.NewServer(webFS, databases, schemas)
+	// Reload function re-reads config and re-introspects
+	cfgPath := *configPath
+	reloadFunc := func() ([]api.DatabaseInfo, map[int]*driver.Schema, []api.ReplicationInfo) {
+		newCfg, err := config.Load(cfgPath)
+		if err != nil {
+			log.Printf("❌ Reload failed to load config: %v", err)
+			return databases, schemas, replication
+		}
+		log.Printf("📋 Reloaded %d database(s) from %s", len(newCfg.Databases), cfgPath)
+		dbs, schs := introspectAll(newCfg)
+		repl := buildReplication(newCfg)
+		return dbs, schs, repl
+	}
+
+	srv := api.NewServer(webFS, databases, schemas, replication, reloadFunc)
 
 	addr := fmt.Sprintf(":%d", *port)
 	log.Printf("🛢  DB Barrel 2.0 starting on http://localhost%s", addr)
@@ -58,6 +73,8 @@ func introspectAll(cfg *config.Config) ([]api.DatabaseInfo, map[int]*driver.Sche
 			ID:     i,
 			Name:   dbCfg.Name,
 			Driver: dbCfg.Driver,
+			Host:   dbCfg.Host,
+			Port:   dbCfg.Port,
 		}
 
 		drv, err := driver.New(dbCfg.Driver)
@@ -95,4 +112,16 @@ func introspectAll(cfg *config.Config) ([]api.DatabaseInfo, map[int]*driver.Sche
 	}
 
 	return databases, schemas
+}
+
+func buildReplication(cfg *config.Config) []api.ReplicationInfo {
+	repl := make([]api.ReplicationInfo, 0, len(cfg.Replication))
+	for _, r := range cfg.Replication {
+		repl = append(repl, api.ReplicationInfo{
+			SourceName: r.SourceName,
+			TargetName: r.TargetName,
+			Type:       r.Type,
+		})
+	}
+	return repl
 }

@@ -3,6 +3,7 @@ package driver
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 
 	_ "github.com/go-sql-driver/mysql"
 )
@@ -70,10 +71,17 @@ func (d *MySQLDriver) Introspect() (*Schema, error) {
 		if err != nil {
 			return nil, fmt.Errorf("foreign keys for %s: %w", tableName, err)
 		}
+		idxs, err := d.getIndexes(tableName)
+		if err != nil {
+			return nil, fmt.Errorf("indexes for %s: %w", tableName, err)
+		}
+		checks, _ := d.getCheckConstraints(tableName) // gracefully ignore on older MySQL
 		schema.Tables = append(schema.Tables, Table{
-			Name:        tableName,
-			Columns:     cols,
-			ForeignKeys: fks,
+			Name:             tableName,
+			Columns:          cols,
+			ForeignKeys:      fks,
+			Indexes:          idxs,
+			CheckConstraints: checks,
 		})
 	}
 	return schema, nil
@@ -179,4 +187,81 @@ func (d *MySQLDriver) getForeignKeys(table string) ([]ForeignKey, error) {
 		fks = append(fks, fk)
 	}
 	return fks, rows.Err()
+}
+
+func (d *MySQLDriver) getIndexes(table string) ([]Index, error) {
+	rows, err := d.db.Query(`
+		SELECT
+			INDEX_NAME,
+			GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX) AS columns,
+			CASE WHEN NON_UNIQUE = 0 THEN 1 ELSE 0 END AS is_unique
+		FROM information_schema.statistics
+		WHERE table_schema = ?
+		  AND table_name = ?
+		  AND INDEX_NAME != 'PRIMARY'
+		GROUP BY INDEX_NAME, NON_UNIQUE
+		ORDER BY INDEX_NAME
+	`, d.dbName, table)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var indexes []Index
+	for rows.Next() {
+		var idx Index
+		var colsStr string
+		var isUnique int
+		if err := rows.Scan(&idx.Name, &colsStr, &isUnique); err != nil {
+			return nil, err
+		}
+		idx.IsUnique = isUnique == 1
+		if colsStr != "" {
+			idx.Columns = splitCSV(colsStr)
+		}
+		indexes = append(indexes, idx)
+	}
+	return indexes, rows.Err()
+}
+
+func (d *MySQLDriver) getCheckConstraints(table string) ([]CheckConstraint, error) {
+	// Only available in MySQL 8.0.16+ and MariaDB 10.2+
+	rows, err := d.db.Query(`
+		SELECT
+			cc.CONSTRAINT_NAME,
+			cc.CHECK_CLAUSE
+		FROM information_schema.check_constraints cc
+		JOIN information_schema.table_constraints tc
+		  ON cc.CONSTRAINT_NAME = tc.CONSTRAINT_NAME
+		 AND cc.CONSTRAINT_SCHEMA = tc.CONSTRAINT_SCHEMA
+		WHERE tc.TABLE_SCHEMA = ?
+		  AND tc.TABLE_NAME = ?
+		  AND tc.CONSTRAINT_TYPE = 'CHECK'
+		ORDER BY cc.CONSTRAINT_NAME
+	`, d.dbName, table)
+	if err != nil {
+		return nil, nil // gracefully return empty on older versions
+	}
+	defer rows.Close()
+
+	var checks []CheckConstraint
+	for rows.Next() {
+		var c CheckConstraint
+		if err := rows.Scan(&c.Name, &c.Expression); err != nil {
+			return nil, nil
+		}
+		checks = append(checks, c)
+	}
+	return checks, rows.Err()
+}
+
+func splitCSV(s string) []string {
+	parts := make([]string, 0)
+	for _, p := range strings.Split(s, ",") {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			parts = append(parts, p)
+		}
+	}
+	return parts
 }

@@ -23,11 +23,26 @@ type ForeignKey struct {
 	ReferencedColumn string `json:"referencedColumn"`
 }
 
-// Table represents a database table with its columns and foreign keys.
+// Index represents a database index on a table.
+type Index struct {
+	Name     string   `json:"name"`
+	Columns  []string `json:"columns"`
+	IsUnique bool     `json:"isUnique"`
+}
+
+// CheckConstraint represents a CHECK constraint on a table.
+type CheckConstraint struct {
+	Name       string `json:"name"`
+	Expression string `json:"expression"`
+}
+
+// Table represents a database table with its columns, foreign keys, indexes, and constraints.
 type Table struct {
-	Name        string       `json:"name"`
-	Columns     []Column     `json:"columns"`
-	ForeignKeys []ForeignKey `json:"foreignKeys"`
+	Name             string            `json:"name"`
+	Columns          []Column          `json:"columns"`
+	ForeignKeys      []ForeignKey      `json:"foreignKeys"`
+	Indexes          []Index           `json:"indexes,omitempty"`
+	CheckConstraints []CheckConstraint `json:"checkConstraints,omitempty"`
 }
 
 // Schema represents the full database schema.

@@ -52,10 +52,15 @@ func (d *SQLiteDriver) Introspect() (*Schema, error) {
 		if err != nil {
 			return nil, fmt.Errorf("foreign keys for %s: %w", tableName, err)
 		}
+		idxs, err := d.getIndexes(tableName)
+		if err != nil {
+			return nil, fmt.Errorf("indexes for %s: %w", tableName, err)
+		}
 		schema.Tables = append(schema.Tables, Table{
 			Name:        tableName,
 			Columns:     cols,
 			ForeignKeys: fks,
+			Indexes:     idxs,
 		})
 	}
 	return schema, nil
@@ -132,4 +137,58 @@ func (d *SQLiteDriver) getForeignKeys(table string) ([]ForeignKey, error) {
 		fks = append(fks, fk)
 	}
 	return fks, rows.Err()
+}
+
+func (d *SQLiteDriver) getIndexes(table string) ([]Index, error) {
+	// PRAGMA index_list returns: seq, name, unique, origin, partial
+	rows, err := d.db.Query(fmt.Sprintf("PRAGMA index_list('%s')", table))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var indexes []Index
+	for rows.Next() {
+		var seq int
+		var idx Index
+		var unique int
+		var origin, partial string
+		if err := rows.Scan(&seq, &idx.Name, &unique, &origin, &partial); err != nil {
+			return nil, err
+		}
+		// Skip autoindex (auto-created for PRIMARY KEY, UNIQUE constraints already handled)
+		if origin == "pk" {
+			continue
+		}
+		idx.IsUnique = unique == 1
+
+		// Get columns for this index
+		cols, err := d.getIndexColumns(idx.Name)
+		if err != nil {
+			return nil, err
+		}
+		idx.Columns = cols
+		indexes = append(indexes, idx)
+	}
+	return indexes, rows.Err()
+}
+
+func (d *SQLiteDriver) getIndexColumns(indexName string) ([]string, error) {
+	// PRAGMA index_info returns: seqno, cid, name
+	rows, err := d.db.Query(fmt.Sprintf("PRAGMA index_info('%s')", indexName))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var cols []string
+	for rows.Next() {
+		var seqno, cid int
+		var name string
+		if err := rows.Scan(&seqno, &cid, &name); err != nil {
+			return nil, err
+		}
+		cols = append(cols, name)
+	}
+	return cols, rows.Err()
 }

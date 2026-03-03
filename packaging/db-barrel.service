@@ -14,12 +14,5 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=db-barrel
 
-# Security hardening
-NoNewPrivileges=true
-ProtectSystem=strict
-ProtectHome=true
-ReadOnlyPaths=/
-ReadWritePaths=/var/log
-
 [Install]
 WantedBy=multi-user.target

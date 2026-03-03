@@ -22,9 +22,17 @@ type DatabaseConfig struct {
 	Params   string `json:"params,omitempty"`  // Extra connection parameters
 }
 
+// ReplicationLink describes a replication relationship between two databases.
+type ReplicationLink struct {
+	SourceName string `json:"sourceName"`
+	TargetName string `json:"targetName"`
+	Type       string `json:"type"` // e.g. "streaming", "logical", "async"
+}
+
 // Config is the top-level configuration structure.
 type Config struct {
-	Databases []DatabaseConfig `json:"databases"`
+	Databases   []DatabaseConfig  `json:"databases"`
+	Replication []ReplicationLink `json:"replication,omitempty"`
 }
 
 // Load reads and validates a JSON config file.

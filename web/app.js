@@ -1,5 +1,6 @@
 /* ============================================================
-   DB Barrel 2.0 — Windows XP Light Mode (v5)
+   DB Barrel 2.0 — Windows XP Light Mode (v6)
+   Search, reload, status indicators, replication, indexes
    ============================================================ */
 
 (function () {
@@ -14,20 +15,36 @@
     const detailTableName = document.getElementById('detail-table-name');
     const detailContent = document.getElementById('detail-content');
     const closeDetailBtn = document.getElementById('close-detail');
+    const reloadBtn = document.getElementById('reload-btn');
+    const schemaSearch = document.getElementById('schema-search');
+    const searchCount = document.getElementById('search-count');
+    const searchClear = document.getElementById('search-clear');
+    const toastEl = document.getElementById('toast');
 
     let databases = [];
+    let replication = [];
     let currentSchema = null;
+    let currentDbId = null;
     let galaxySim = null;
 
     // XP DB type colors
     const DB_CLR = {
-        postgresql: { fill: '#B8D4F0', stroke: '#336791', text: '#003366' },
-        mysql: { fill: '#FFF0D0', stroke: '#F29111', text: '#8B4500' },
-        mariadb: { fill: '#F0E0D4', stroke: '#C0765A', text: '#5E3322' },
-        sqlite: { fill: '#D0E8F8', stroke: '#4F9CD0', text: '#1A4970' },
+        postgresql: { fill: '#B8D4F0', stroke: '#336791', text: '#003366', hdr: 'linear-gradient(180deg, #4A8CC7 0%, #336791 100%)' },
+        mysql:      { fill: '#FFF0D0', stroke: '#F29111', text: '#8B4500', hdr: 'linear-gradient(180deg, #F5A623 0%, #F29111 100%)' },
+        mariadb:    { fill: '#F0E0D4', stroke: '#C0765A', text: '#5E3322', hdr: 'linear-gradient(180deg, #D4896A 0%, #C0765A 100%)' },
+        sqlite:     { fill: '#D0E8F8', stroke: '#4F9CD0', text: '#1A4970', hdr: 'linear-gradient(180deg, #6AB0DC 0%, #4F9CD0 100%)' },
     };
-    const DEF_CLR = { fill: '#E0E0E0', stroke: '#888', text: '#333' };
+    const DEF_CLR = { fill: '#E0E0E0', stroke: '#888', text: '#333', hdr: '#888' };
     function clr(d) { return DB_CLR[d] || DEF_CLR; }
+
+    // ---- Toast ----
+    let toastTimer = null;
+    function showToast(msg) {
+        toastEl.textContent = msg;
+        toastEl.hidden = false;
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => { toastEl.hidden = true; }, 2500);
+    }
 
     // ---- Navigation ----
     function showGallery() {
@@ -36,7 +53,11 @@
         galaxyScreen.classList.add('fade-in');
         currentDbLabel.hidden = true;
         currentSchema = null;
+        currentDbId = null;
         detailOverlay.hidden = true;
+        schemaSearch.value = '';
+        searchCount.hidden = true;
+        searchClear.hidden = true;
         if (galaxySim) galaxySim.alpha(0.3).restart();
     }
 
@@ -51,11 +72,39 @@
 
     logoHome.addEventListener('click', showGallery);
 
+    // ---- Reload ----
+    reloadBtn.addEventListener('click', async () => {
+        reloadBtn.classList.add('spinning');
+        try {
+            const r = await fetch('/api/reload', { method: 'POST' });
+            const d = await r.json();
+            if (!r.ok) throw new Error(d.error || 'Reload failed');
+            showToast(`✅ Reloaded ${d.databases} database(s)`);
+            // Re-fetch everything
+            await boot();
+            // If we were viewing a schema, re-open it
+            if (currentDbId !== null) {
+                const db = databases.find(x => x.id === currentDbId);
+                if (db && db.status === 'ok') openDb(db);
+                else showGallery();
+            }
+        } catch (e) {
+            showToast('❌ Reload failed: ' + e.message);
+            console.error(e);
+        } finally {
+            reloadBtn.classList.remove('spinning');
+        }
+    });
+
     // ---- Load ----
     async function boot() {
         try {
-            const r = await fetch('/api/databases');
-            databases = await r.json();
+            const [dbRes, topoRes] = await Promise.all([
+                fetch('/api/databases'),
+                fetch('/api/topology'),
+            ]);
+            databases = await dbRes.json();
+            replication = await topoRes.json();
             dbCountBadge.textContent = databases.length + ' database' + (databases.length !== 1 ? 's' : '');
             renderGalaxy(databases);
         } catch (e) { console.error(e); }
@@ -70,13 +119,16 @@
 
         const svg = d3.select('#galaxy-svg').attr('viewBox', [0, 0, W, H]);
 
-
-
         // Drop shadow filter
         const defs = svg.append('defs');
         const shf = defs.append('filter').attr('id', 'xp-shadow')
             .attr('x', '-10%').attr('y', '-10%').attr('width', '130%').attr('height', '140%');
         shf.append('feDropShadow').attr('dx', 2).attr('dy', 2).attr('stdDeviation', 3).attr('flood-opacity', 0.2);
+
+        // Replication arrow marker
+        defs.append('marker').attr('id', 'repl-arr').attr('viewBox', '0 -5 10 10')
+            .attr('refX', 8).attr('refY', 0).attr('markerWidth', 8).attr('markerHeight', 8).attr('orient', 'auto')
+            .append('path').attr('d', 'M0,-5L10,0L0,5').attr('fill', '#9333EA').attr('fill-opacity', 0.6);
 
         const root = svg.append('g');
 
@@ -86,78 +138,94 @@
             .on('zoom', ev => root.attr('transform', ev.transform));
         svg.call(zoom);
 
-        const NODE_W = 142, NODE_H = 148, ICON_SIZE = 90;
+        const NODE_W = 142, NODE_H = 158, ICON_SIZE = 90;
         const nodes = dbs.map((db, i) => ({
             ...db, index: i,
             x: W / 2 + (Math.random() - 0.5) * 300,
             y: H / 2 + (Math.random() - 0.5) * 200,
         }));
 
-        // Orbit lines
+        // Build name -> node map for replication links
+        const nameMap = {};
+        nodes.forEach(n => { nameMap[n.name] = n; });
+
+        // Replication links data
+        const replLinks = (replication || []).filter(r => nameMap[r.sourceName] && nameMap[r.targetName])
+            .map(r => ({ source: nameMap[r.sourceName], target: nameMap[r.targetName], type: r.type }));
+
+        // Orbit lines (between all nodes)
         const orbits = root.append('g');
         for (let i = 0; i < nodes.length; i++)
             for (let j = i + 1; j < nodes.length; j++)
                 orbits.append('line').attr('class', 'orbit-line').attr('data-i', i).attr('data-j', j);
+
+        // Replication arrow group
+        const replG = root.append('g');
+        const replPaths = replG.selectAll('.repl-link').data(replLinks).enter()
+            .append('path').attr('class', 'repl-link').attr('marker-end', 'url(#repl-arr)');
+        const replLabels = replG.selectAll('.repl-label').data(replLinks).enter()
+            .append('text').attr('class', 'repl-label').text(d => d.type || 'replica');
 
         const grp = root.append('g');
         const nodeEls = grp.selectAll('.db-node').data(nodes).enter().append('g')
             .attr('class', d => 'db-node' + (d.status === 'error' ? ' error-node' : ''))
             .attr('transform', d => `translate(${d.x},${d.y})`);
 
-        // XP-style card shadow
-        nodeEls.append('rect')
-            .attr('class', 'node-shadow')
-            .attr('x', -NODE_W / 2 + 3).attr('y', -28 + 3)
-            .attr('width', NODE_W).attr('height', NODE_H)
-            .attr('rx', 3).attr('fill', 'rgba(0,0,0,0.08)').attr('opacity', 0);
-
         // Card background
         nodeEls.append('rect')
             .attr('class', 'node-border')
             .attr('x', -NODE_W / 2).attr('y', -28)
             .attr('width', NODE_W).attr('height', NODE_H)
-            .attr('rx', 3)
+            .attr('rx', 4)
             .attr('fill', d => clr(d.driver).fill)
             .attr('stroke', d => clr(d.driver).stroke)
             .attr('stroke-width', 2)
             .attr('filter', 'url(#xp-shadow)');
 
-        // Card titlebar (mini XP-style header)
+        // Card titlebar
         nodeEls.append('rect')
             .attr('x', -NODE_W / 2 + 1).attr('y', -27)
             .attr('width', NODE_W - 2).attr('height', 16)
-            .attr('rx', 2)
+            .attr('rx', 3)
             .attr('fill', d => clr(d.driver).stroke)
             .attr('opacity', 0.15);
 
-        // DB logo — centered between titlebar (y=-10) and labels (y~88)
+        // Status indicator (animated dot)
+        nodeEls.append('circle')
+            .attr('class', d => 'status-dot ' + (d.status === 'ok' ? 'ok' : 'error'))
+            .attr('cx', NODE_W / 2 - 14).attr('cy', -16)
+            .attr('r', 5);
+
+        // DB logo
         nodeEls.append('image')
             .attr('href', d => `svg/${d.driver}.svg`)
-            .attr('x', -ICON_SIZE / 2).attr('y', -16)
+            .attr('x', -ICON_SIZE / 2).attr('y', -12)
             .attr('width', ICON_SIZE).attr('height', ICON_SIZE)
             .style('pointer-events', 'none');
 
-        // Status icon (green checkmark or red X)
-        nodeEls.append('text')
-            .attr('x', NODE_W / 2 - 14).attr('y', -12)
-            .attr('font-size', '13px')
-            .attr('text-anchor', 'middle')
-            .text(d => d.status === 'ok' ? '✔' : '✘')
-            .attr('fill', d => d.status === 'ok' ? '#2E8B57' : '#CC0000');
-
-        // Name — tight under the logo
+        // Name
         nodeEls.append('text').attr('class', 'node-label')
-            .attr('y', 88).text(d => d.name);
+            .attr('y', 92).text(d => d.name);
 
         // Driver badge
         nodeEls.append('text').attr('class', 'node-driver')
-            .attr('y', 102)
+            .attr('y', 106)
             .attr('fill', d => clr(d.driver).text)
             .text(d => d.driver);
 
-        // Error label only
+        // Host info label
+        nodeEls.append('text').attr('class', 'node-host')
+            .attr('y', 118)
+            .text(d => {
+                if (d.driver === 'sqlite') return d.host || 'local file';
+                if (d.host && d.port) return d.host + ':' + d.port;
+                if (d.host) return d.host;
+                return '';
+            });
+
+        // Error label
         nodeEls.filter(d => d.status === 'error').each(function (d) {
-            d3.select(this).append('text').attr('class', 'node-error').attr('y', NODE_H - 24).text('Error');
+            d3.select(this).append('text').attr('class', 'node-error').attr('y', NODE_H - 24).text('Connection Failed');
         });
 
         // Click
@@ -169,7 +237,7 @@
         galaxySim = d3.forceSimulation(nodes)
             .force('center', d3.forceCenter(W / 2, H / 2))
             .force('charge', d3.forceManyBody().strength(-500))
-            .force('collision', d3.forceCollide().radius(90))
+            .force('collision', d3.forceCollide().radius(95))
             .force('x', d3.forceX(W / 2).strength(0.04))
             .force('y', d3.forceY(H / 2).strength(0.04))
             .alphaDecay(0.015)
@@ -180,6 +248,20 @@
                     .attr('y1', function () { return nodes[+this.dataset.i].y; })
                     .attr('x2', function () { return nodes[+this.dataset.j].x; })
                     .attr('y2', function () { return nodes[+this.dataset.j].y; });
+                // Update replication arrows
+                replPaths.attr('d', d => {
+                    const sx = d.source.x, sy = d.source.y;
+                    const tx = d.target.x, ty = d.target.y;
+                    const mx = (sx + tx) / 2, my = (sy + ty) / 2;
+                    const dx = tx - sx, dy = ty - sy;
+                    const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+                    const off = dist * 0.15;
+                    const nx = -dy / dist, ny = dx / dist;
+                    return `M${sx},${sy} Q${mx + nx * off},${my + ny * off} ${tx},${ty}`;
+                });
+                replLabels
+                    .attr('x', d => (d.source.x + d.target.x) / 2)
+                    .attr('y', d => (d.source.y + d.target.y) / 2 - 8);
             });
 
         const drag = d3.drag()
@@ -191,6 +273,7 @@
 
     // ---- Open DB ----
     async function openDb(db) {
+        currentDbId = db.id;
         showSchema(db.name);
         try {
             const r = await fetch(`/api/databases/${db.id}/schema`);
@@ -211,8 +294,6 @@
         const svg = d3.select('#schema-svg').attr('viewBox', [0, 0, W, H]);
         const defs = svg.append('defs');
 
-
-
         // Shadow
         const sf = defs.append('filter').attr('id', 'tshadow')
             .attr('x', '-5%').attr('y', '-5%').attr('width', '115%').attr('height', '120%');
@@ -223,7 +304,7 @@
             .attr('refX', 8).attr('refY', 0).attr('markerWidth', 7).attr('markerHeight', 7).attr('orient', 'auto')
             .append('path').attr('d', 'M0,-5L10,0L0,5').attr('fill', '#0054E3').attr('fill-opacity', 0.5);
 
-        // Table color palette (flat matte)
+        // Table color palette
         const TABLE_COLORS = ['#2663C9', '#2E8B57', '#D4782F', '#7B4BB3', '#1A8A8A', '#C0392B'];
         const numColors = TABLE_COLORS.length;
 
@@ -278,9 +359,10 @@
             .attr('width', d => d.width).attr('height', d => d.height)
             .attr('filter', 'url(#tshadow)');
 
-        // Colored header bar (flat matte, cycles through palette)
+        // Colored header bar
         nodeEls.append('rect')
             .attr('width', d => d.width).attr('height', HDR)
+            .attr('rx', '3 3 0 0')
             .attr('fill', (d, i) => TABLE_COLORS[i % numColors]);
 
         // Title
@@ -295,12 +377,12 @@
                 const y = HDR + ci * ROW + ROW / 2 + 4;
                 if (ci === 0) g.append('line').attr('x1', 1).attr('x2', td.width - 1).attr('y1', HDR).attr('y2', HDR).attr('stroke', '#ACA899');
 
-                // Alternating row bg (inset to stay inside border)
+                // Alternating row bg
                 if (ci % 2 === 1) g.append('rect').attr('x', 1).attr('y', HDR + ci * ROW).attr('width', td.width - 2).attr('height', ROW).attr('fill', '#F5F3EB');
 
                 if (col.isPrimaryKey) g.append('text').attr('class', 'column-icon pk').attr('x', PAD).attr('y', y).text('🔑');
                 else if (fkc.has(col.name)) g.append('text').attr('class', 'column-icon fk').attr('x', PAD).attr('y', y).text('🔗');
-                g.append('text').attr('class', 'column-name').attr('x', PAD + 16).attr('y', y).text(col.name);
+                g.append('text').attr('class', 'column-name').attr('x', PAD + 16).attr('y', y).attr('data-col', col.name).text(col.name);
                 g.append('text').attr('class', 'column-type').attr('x', td.width - PAD).attr('y', y).attr('text-anchor', 'end').text(col.dataType);
             });
         });
@@ -325,7 +407,6 @@
                 if (!s || !t) return '';
                 const dx = t.x - s.x, dy = t.y - s.y;
                 const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-                // Clip to box edges
                 const sClip = clipToBox(s.x, s.y, s.width, s.height, dx / dist, dy / dist);
                 const tClip = clipToBox(t.x, t.y, t.width, t.height, -dx / dist, -dy / dist);
                 const mx = (sClip.x + tClip.x) / 2, my = (sClip.y + tClip.y) / 2;
@@ -336,7 +417,6 @@
         }
 
         function clipToBox(cx, cy, w, h, dirX, dirY) {
-            // Find intersection of ray from center in direction (dirX, dirY) with box edges
             const hw = w / 2, hh = h / 2;
             let tx = Infinity, ty = Infinity;
             if (dirX !== 0) tx = Math.abs(hw / dirX);
@@ -347,6 +427,68 @@
 
         svg.on('click', () => { detailOverlay.hidden = true; deselectAll(); });
         setTimeout(() => fit(svg, zoom, tN, W, H), 700);
+    }
+
+    // ---- Search ----
+    schemaSearch.addEventListener('input', () => {
+        const q = schemaSearch.value.trim().toLowerCase();
+        searchClear.hidden = !q;
+        if (!q) {
+            clearSearch();
+            return;
+        }
+        if (!currentSchema) return;
+
+        let matchCount = 0;
+        const matchedTables = new Set();
+
+        currentSchema.tables.forEach(t => {
+            const tMatch = t.name.toLowerCase().includes(q);
+            const matchedCols = t.columns.filter(c => c.name.toLowerCase().includes(q));
+            if (tMatch || matchedCols.length > 0) {
+                matchedTables.add(t.name);
+                matchCount += (tMatch ? 1 : 0) + matchedCols.length;
+            }
+        });
+
+        // Apply highlighting to SVG nodes
+        document.querySelectorAll('.table-node').forEach(el => {
+            const name = el.dataset.table;
+            if (matchedTables.has(name)) {
+                el.classList.add('search-match');
+                el.classList.remove('search-dim');
+                // Highlight matched columns
+                el.querySelectorAll('.column-name').forEach(cn => {
+                    if (cn.dataset.col && cn.dataset.col.toLowerCase().includes(q)) {
+                        cn.classList.add('search-hit');
+                    } else {
+                        cn.classList.remove('search-hit');
+                    }
+                });
+            } else {
+                el.classList.remove('search-match');
+                el.classList.add('search-dim');
+                el.querySelectorAll('.column-name').forEach(cn => cn.classList.remove('search-hit'));
+            }
+        });
+
+        searchCount.textContent = matchCount + ' match' + (matchCount !== 1 ? 'es' : '');
+        searchCount.hidden = false;
+    });
+
+    searchClear.addEventListener('click', () => {
+        schemaSearch.value = '';
+        clearSearch();
+        schemaSearch.focus();
+    });
+
+    function clearSearch() {
+        document.querySelectorAll('.table-node').forEach(el => {
+            el.classList.remove('search-match', 'search-dim');
+            el.querySelectorAll('.column-name').forEach(cn => cn.classList.remove('search-hit'));
+        });
+        searchCount.hidden = true;
+        searchClear.hidden = true;
     }
 
     // ---- Selection ----
@@ -365,9 +507,10 @@
     function showDetail(name) {
         const t = currentSchema.tables.find(tbl => tbl.name === name);
         if (!t) return;
-        detailTableName.textContent = 'Table Properties - ' + t.name;
+        detailTableName.textContent = 'Table Properties — ' + t.name;
         const fkc = new Set((t.foreignKeys || []).map(fk => fk.columnName));
-        let h = '<div class="detail-section"><h4>Columns</h4>';
+
+        let h = '<div class="detail-section"><h4>Columns (' + t.columns.length + ')</h4>';
         t.columns.forEach(c => {
             const pk = c.isPrimaryKey, fk = fkc.has(c.name);
             h += `<div class="detail-column">
@@ -378,8 +521,9 @@
             </div>`;
         });
         h += '</div>';
+
         if (t.foreignKeys && t.foreignKeys.length) {
-            h += '<div class="detail-section"><h4>Foreign Keys</h4>';
+            h += '<div class="detail-section"><h4>Foreign Keys (' + t.foreignKeys.length + ')</h4>';
             t.foreignKeys.forEach(fk => {
                 h += `<div class="detail-fk">
                     <span class="fk-name">${esc(fk.constraintName)}</span>
@@ -388,6 +532,30 @@
             });
             h += '</div>';
         }
+
+        if (t.indexes && t.indexes.length) {
+            h += '<div class="detail-section"><h4>Indexes (' + t.indexes.length + ')</h4>';
+            t.indexes.forEach(idx => {
+                h += `<div class="detail-index">
+                    <span class="idx-name">${esc(idx.name)}</span>
+                    <span class="idx-cols">(${idx.columns.map(esc).join(', ')})</span>
+                    ${idx.isUnique ? '<span class="idx-unique">UNIQUE</span>' : ''}
+                </div>`;
+            });
+            h += '</div>';
+        }
+
+        if (t.checkConstraints && t.checkConstraints.length) {
+            h += '<div class="detail-section"><h4>Check Constraints (' + t.checkConstraints.length + ')</h4>';
+            t.checkConstraints.forEach(chk => {
+                h += `<div class="detail-check">
+                    <span class="chk-name">${esc(chk.name)}</span>
+                    <span class="chk-expr">${esc(chk.expression)}</span>
+                </div>`;
+            });
+            h += '</div>';
+        }
+
         detailContent.innerHTML = h;
         detailOverlay.hidden = false;
     }

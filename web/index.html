@@ -26,6 +26,7 @@
         </div>
         <div class="header-right">
             <span id="db-count-badge" class="count-badge"></span>
+            <button id="reload-btn" class="xp-btn reload-btn" title="Reload all databases">🔄</button>
         </div>
     </header>
 
@@ -36,6 +37,14 @@
 
     <!-- Screen 2: Schema View -->
     <div id="schema-screen" class="screen" hidden>
+        <div id="schema-toolbar">
+            <div class="search-container">
+                <span class="search-icon">🔍</span>
+                <input type="text" id="schema-search" placeholder="Search tables & columns…" autocomplete="off">
+                <span id="search-count" class="search-count" hidden></span>
+                <button id="search-clear" class="search-clear" hidden>✕</button>
+            </div>
+        </div>
         <svg id="schema-svg"></svg>
     </div>
 
@@ -47,6 +56,9 @@
         </div>
         <div id="detail-content" class="xp-dialog-body"></div>
     </div>
+
+    <!-- Toast notification -->
+    <div id="toast" class="toast" hidden></div>
 
     <script src="https://d3js.org/d3.v7.min.js"></script>
     <script src="app.js"></script>
