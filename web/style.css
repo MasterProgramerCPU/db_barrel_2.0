@@ -31,6 +31,10 @@
     padding: 0;
 }
 
+[hidden] {
+    display: none !important;
+}
+
 html {
     height: 100%;
     overflow: hidden;

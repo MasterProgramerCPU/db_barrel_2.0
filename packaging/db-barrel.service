@@ -5,9 +5,9 @@ After=network.target postgresql.service mysql.service mariadb.service
 
 [Service]
 Type=simple
-User=db-barrel
-Group=db-barrel
-ExecStart=/usr/bin/db-barrel -port 8080 -config /etc/db-barrel/databases.json
+User=root
+Group=root
+ExecStart=/usr/bin/db-barrel -port 30000 -config /etc/db-barrel/databases.json
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal
