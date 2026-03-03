@@ -20,6 +20,8 @@
     const searchCount = document.getElementById('search-count');
     const searchClear = document.getElementById('search-clear');
     const toastEl = document.getElementById('toast');
+    const reloadLabelDefault = 'Reload';
+    const reloadLabelBusy = 'Reloading...';
 
     let databases = [];
     let replication = [];
@@ -74,7 +76,9 @@
 
     // ---- Reload ----
     reloadBtn.addEventListener('click', async () => {
-        reloadBtn.classList.add('spinning');
+        reloadBtn.classList.add('is-loading');
+        reloadBtn.disabled = true;
+        reloadBtn.textContent = reloadLabelBusy;
         try {
             const r = await fetch('/api/reload', { method: 'POST' });
             const d = await r.json();
@@ -92,7 +96,9 @@
             showToast('❌ Reload failed: ' + e.message);
             console.error(e);
         } finally {
-            reloadBtn.classList.remove('spinning');
+            reloadBtn.classList.remove('is-loading');
+            reloadBtn.disabled = false;
+            reloadBtn.textContent = reloadLabelDefault;
         }
     });
 
