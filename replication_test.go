@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/robotelu/db_barrel_2.0/internal/api"
+	"github.com/robotelu/db_barrel_2.0/internal/config"
 )
 
 func TestParsePGConnInfo(t *testing.T) {
@@ -21,6 +22,24 @@ func TestParsePGConnInfo(t *testing.T) {
 	}
 	if fields["password"] != "s ec'ret" {
 		t.Fatalf("expected unescaped quoted password, got %q", fields["password"])
+	}
+}
+
+func TestParsePGConnInfoURI(t *testing.T) {
+	connInfo := "postgresql://replicator:s%20ec%27ret@primary.db.local:5432/prod?application_name=subscriber1"
+	fields := parsePGConnInfo(connInfo)
+
+	if fields["host"] != "primary.db.local" {
+		t.Fatalf("expected host, got %q", fields["host"])
+	}
+	if fields["port"] != "5432" {
+		t.Fatalf("expected port, got %q", fields["port"])
+	}
+	if fields["dbname"] != "prod" {
+		t.Fatalf("expected dbname, got %q", fields["dbname"])
+	}
+	if fields["password"] != "s ec'ret" {
+		t.Fatalf("expected decoded password, got %q", fields["password"])
 	}
 }
 
@@ -99,5 +118,28 @@ func TestEndpointFindPrefersExactDBOverSharedHostPort(t *testing.T) {
 	name, ok := idx.find("pg.local", 5432, "prod")
 	if !ok || name != "Primary" {
 		t.Fatalf("expected exact db match Primary, got ok=%v name=%q", ok, name)
+	}
+}
+
+func TestReplicationFromConfigCanonicalizesNames(t *testing.T) {
+	cfg := &config.Config{
+		Databases: []config.DatabaseConfig{
+			{Name: "Primary DB"},
+			{Name: "Replica DB"},
+		},
+		Replication: []config.ReplicationLink{
+			{SourceName: " primary db ", TargetName: "REPLICA DB", Type: "streaming"},
+		},
+	}
+
+	links := replicationFromConfig(cfg)
+	if len(links) != 1 {
+		t.Fatalf("expected 1 link, got %d", len(links))
+	}
+	if links[0].SourceName != "Primary DB" {
+		t.Fatalf("expected canonical source name, got %q", links[0].SourceName)
+	}
+	if links[0].TargetName != "Replica DB" {
+		t.Fatalf("expected canonical target name, got %q", links[0].TargetName)
 	}
 }

@@ -29,6 +29,10 @@
     let currentDbId = null;
     let galaxySim = null;
 
+    function normalizeName(v) {
+        return String(v || '').trim().toLowerCase();
+    }
+
     // XP DB type colors
     const DB_CLR = {
         postgresql: { fill: '#B8D4F0', stroke: '#336791', text: '#003366', hdr: 'linear-gradient(180deg, #4A8CC7 0%, #336791 100%)' },
@@ -109,8 +113,10 @@
                 fetch('/api/databases'),
                 fetch('/api/topology'),
             ]);
-            databases = await dbRes.json();
-            replication = await topoRes.json();
+            const dbData = await dbRes.json();
+            const topoData = await topoRes.json();
+            databases = Array.isArray(dbData) ? dbData : [];
+            replication = Array.isArray(topoData) ? topoData : [];
             dbCountBadge.textContent = databases.length + ' database' + (databases.length !== 1 ? 's' : '');
             renderGalaxy(databases);
         } catch (e) { console.error(e); }
@@ -153,13 +159,16 @@
 
         // Build name -> node map for replication links
         const nameMap = {};
-        nodes.forEach(n => { nameMap[n.name] = n; });
+        nodes.forEach(n => {
+            const key = normalizeName(n.name);
+            if (key && !nameMap[key]) nameMap[key] = n;
+        });
 
         // Replication links data
-        const replLinks = (replication || []).filter(r => nameMap[r.sourceName] && nameMap[r.targetName])
+        const replLinks = replication.filter(r => nameMap[normalizeName(r.sourceName)] && nameMap[normalizeName(r.targetName)])
             .map(r => ({
-                source: nameMap[r.sourceName],
-                target: nameMap[r.targetName],
+                source: nameMap[normalizeName(r.sourceName)],
+                target: nameMap[normalizeName(r.targetName)],
                 type: r.type,
                 details: r.details || ''
             }));

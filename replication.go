@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -33,12 +34,13 @@ func buildReplication(cfg *config.Config) []api.ReplicationInfo {
 }
 
 func replicationFromConfig(cfg *config.Config) []api.ReplicationInfo {
+	nameLookup := buildCanonicalDBNameLookup(cfg)
 	repl := make([]api.ReplicationInfo, 0, len(cfg.Replication))
 	for _, r := range cfg.Replication {
 		repl = append(repl, api.ReplicationInfo{
-			SourceName: r.SourceName,
-			TargetName: r.TargetName,
-			Type:       r.Type,
+			SourceName: canonicalDBName(r.SourceName, nameLookup),
+			TargetName: canonicalDBName(r.TargetName, nameLookup),
+			Type:       strings.TrimSpace(r.Type),
 		})
 	}
 	return repl
@@ -508,7 +510,11 @@ func dedupeReplicationLinks(links []api.ReplicationInfo) []api.ReplicationInfo {
 	out := make([]api.ReplicationInfo, 0, len(links))
 
 	for _, l := range links {
-		if l.SourceName == "" || l.TargetName == "" || l.SourceName == l.TargetName {
+		l.SourceName = strings.TrimSpace(l.SourceName)
+		l.TargetName = strings.TrimSpace(l.TargetName)
+		l.Type = strings.TrimSpace(l.Type)
+		l.Details = strings.TrimSpace(l.Details)
+		if l.SourceName == "" || l.TargetName == "" || strings.EqualFold(l.SourceName, l.TargetName) {
 			continue
 		}
 
@@ -517,13 +523,12 @@ func dedupeReplicationLinks(links []api.ReplicationInfo) []api.ReplicationInfo {
 			strings.ToLower(strings.TrimSpace(l.Type))
 
 		if idx, ok := seen[key]; ok {
-			if out[idx].Details == "" && strings.TrimSpace(l.Details) != "" {
-				out[idx].Details = strings.TrimSpace(l.Details)
+			if out[idx].Details == "" && l.Details != "" {
+				out[idx].Details = l.Details
 			}
 			continue
 		}
 
-		l.Details = strings.TrimSpace(l.Details)
 		seen[key] = len(out)
 		out = append(out, l)
 	}
@@ -532,8 +537,24 @@ func dedupeReplicationLinks(links []api.ReplicationInfo) []api.ReplicationInfo {
 }
 
 func parsePGConnInfo(s string) map[string]string {
+	trimmed := strings.TrimSpace(s)
+	if trimmed == "" {
+		return map[string]string{}
+	}
+
+	// PostgreSQL conninfo can be URI-style (postgres:// or postgresql://).
+	lower := strings.ToLower(trimmed)
+	if strings.HasPrefix(lower, "postgres://") || strings.HasPrefix(lower, "postgresql://") {
+		if uriFields := parsePGConnInfoURI(trimmed); len(uriFields) > 0 {
+			return uriFields
+		}
+	}
+
+	return parsePGConnInfoKV(trimmed)
+}
+
+func parsePGConnInfoKV(s string) map[string]string {
 	out := make(map[string]string)
-	s = strings.TrimSpace(s)
 	for len(s) > 0 {
 		s = strings.TrimLeft(s, " \t\n\r")
 		if s == "" {
@@ -589,6 +610,84 @@ func parsePGConnInfo(s string) map[string]string {
 		out[strings.ToLower(key)] = strings.TrimSpace(val)
 	}
 	return out
+}
+
+func parsePGConnInfoURI(connURI string) map[string]string {
+	u, err := url.Parse(connURI)
+	if err != nil {
+		return nil
+	}
+
+	out := make(map[string]string)
+
+	if host := u.Hostname(); host != "" {
+		out["host"] = host
+	}
+	if port := u.Port(); port != "" {
+		out["port"] = port
+	}
+
+	dbname := strings.TrimPrefix(strings.TrimSpace(u.Path), "/")
+	if dbname != "" {
+		out["dbname"] = dbname
+	}
+
+	if u.User != nil {
+		if user := u.User.Username(); user != "" {
+			out["user"] = user
+		}
+		if pass, ok := u.User.Password(); ok {
+			out["password"] = pass
+		}
+	}
+
+	q := u.Query()
+	if host := firstNonEmpty(q.Get("host"), q.Get("hostaddr")); host != "" {
+		out["host"] = host
+	}
+	if port := q.Get("port"); port != "" {
+		out["port"] = port
+	}
+	if db := q.Get("dbname"); db != "" {
+		out["dbname"] = db
+	}
+	if user := q.Get("user"); user != "" {
+		out["user"] = user
+	}
+	if pass := q.Get("password"); pass != "" {
+		out["password"] = pass
+	}
+
+	return out
+}
+
+func buildCanonicalDBNameLookup(cfg *config.Config) map[string]string {
+	lookup := make(map[string]string, len(cfg.Databases))
+	for _, db := range cfg.Databases {
+		trimmed := strings.TrimSpace(db.Name)
+		key := normalizeDB(trimmed)
+		if key == "" {
+			continue
+		}
+		if existing, ok := lookup[key]; !ok {
+			lookup[key] = trimmed
+		} else if existing != trimmed {
+			// Ambiguous case-insensitive names; keep original values from replication config.
+			lookup[key] = ""
+		}
+	}
+	return lookup
+}
+
+func canonicalDBName(name string, lookup map[string]string) string {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		return ""
+	}
+	if canonical, ok := lookup[normalizeDB(trimmed)]; ok && canonical != "" {
+		return canonical
+	}
+	return trimmed
 }
 
 func parsePortDefault(s string, fallback int) int {
