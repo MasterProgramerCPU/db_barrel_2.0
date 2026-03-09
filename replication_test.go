@@ -89,3 +89,15 @@ func TestMatchSourceEndpointLocalhostVariants(t *testing.T) {
 		t.Fatalf("expected localhost variant to match Primary, got ok=%v source=%q", ok, source)
 	}
 }
+
+func TestEndpointFindPrefersExactDBOverSharedHostPort(t *testing.T) {
+	idx := buildEndpointIndex([]pgEndpoint{
+		{Name: "Primary", Host: "pg.local", Port: 5432, Database: "prod"},
+		{Name: "Subscriber", Host: "pg.local", Port: 5432, Database: "analytics"},
+	})
+
+	name, ok := idx.find("pg.local", 5432, "prod")
+	if !ok || name != "Primary" {
+		t.Fatalf("expected exact db match Primary, got ok=%v name=%q", ok, name)
+	}
+}

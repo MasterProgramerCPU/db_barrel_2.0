@@ -23,6 +23,7 @@ type endpointIndex struct {
 	byHostPortDB map[string][]string
 	byHostPort   map[string][]string
 	byHost       map[string][]string
+	byDB         map[string][]string
 }
 
 func buildReplication(cfg *config.Config) []api.ReplicationInfo {
@@ -135,6 +136,29 @@ func discoverPostgresReplication(cfg *config.Config) []api.ReplicationInfo {
 				})
 			}
 			rows.Close()
+		} else {
+			// Fallback when pg_subscription_rel join is not accessible.
+			rows, err = db.Query("SELECT subname, subconninfo FROM pg_subscription")
+			if err == nil {
+				for rows.Next() {
+					var subName, connInfo string
+					if err := rows.Scan(&subName, &connInfo); err != nil {
+						continue
+					}
+					fields := parsePGConnInfo(connInfo)
+					sourceName, ok := matchSourceEndpoint(fields, idx)
+					if !ok || sourceName == ep.Name {
+						continue
+					}
+					links = append(links, api.ReplicationInfo{
+						SourceName: sourceName,
+						TargetName: ep.Name,
+						Type:       "logical",
+						Details:    logicalDetails(subName, ""),
+					})
+				}
+				rows.Close()
+			}
 		}
 
 		db.Close()
@@ -193,7 +217,7 @@ func inferStreamingSource(connFields []map[string]string, idx endpointIndex, pri
 
 		for i, host := range hosts {
 			port := ports[min(i, len(ports)-1)]
-			candidates := idx.candidates(host, port, dbName)
+			candidates := idx.candidatesExact(host, port, dbName)
 			if len(candidates) > 0 {
 				hadCandidates = true
 			}
@@ -204,13 +228,21 @@ func inferStreamingSource(connFields []map[string]string, idx endpointIndex, pri
 
 		for i, host := range hosts {
 			port := ports[min(i, len(ports)-1)]
-			candidates := idx.candidates(host, port, "")
+			candidates := idx.candidatesHostPort(host, port)
 			if len(candidates) > 0 {
 				hadCandidates = true
 			}
 			if sourceName, ok := chooseCandidate(candidates, primarySet, primaryNames); ok {
 				return sourceName, true
 			}
+		}
+
+		dbCandidates := idx.byDB[normalizeDB(dbName)]
+		if len(dbCandidates) > 0 {
+			hadCandidates = true
+		}
+		if sourceName, ok := chooseCandidate(dbCandidates, primarySet, primaryNames); ok {
+			return sourceName, true
 		}
 	}
 
@@ -354,11 +386,16 @@ func buildEndpointIndex(endpoints []pgEndpoint) endpointIndex {
 		byHostPortDB: make(map[string][]string, len(endpoints)),
 		byHostPort:   make(map[string][]string, len(endpoints)),
 		byHost:       make(map[string][]string, len(endpoints)),
+		byDB:         make(map[string][]string, len(endpoints)),
 	}
 	for _, ep := range endpoints {
+		dbKey := normalizeDB(ep.Database)
+		if dbKey != "" {
+			idx.byDB[dbKey] = appendUnique(idx.byDB[dbKey], ep.Name)
+		}
 		for _, host := range canonicalHostVariants(ep.Host) {
 			hp := hostPortKey(host, ep.Port)
-			hpd := hostPortDBKey(host, ep.Port, normalizeDB(ep.Database))
+			hpd := hostPortDBKey(host, ep.Port, dbKey)
 			idx.byHostPortDB[hpd] = appendUnique(idx.byHostPortDB[hpd], ep.Name)
 			idx.byHostPort[hp] = appendUnique(idx.byHostPort[hp], ep.Name)
 			idx.byHost[host] = appendUnique(idx.byHost[host], ep.Name)
@@ -368,10 +405,27 @@ func buildEndpointIndex(endpoints []pgEndpoint) endpointIndex {
 }
 
 func (i endpointIndex) find(host string, port int, database string) (string, bool) {
-	candidates := i.candidates(host, port, database)
+	dbKey := normalizeDB(database)
+	if dbKey != "" {
+		candidates := i.candidatesExact(host, port, dbKey)
+		if len(candidates) == 1 {
+			return candidates[0], true
+		}
+	}
+
+	candidates := i.candidatesHostPort(host, port)
 	if len(candidates) == 1 {
 		return candidates[0], true
 	}
+
+	// Last fallback when host cannot be mapped but dbname is unique in config.
+	if dbKey != "" {
+		dbCandidates := i.byDB[dbKey]
+		if len(dbCandidates) == 1 {
+			return dbCandidates[0], true
+		}
+	}
+
 	return "", false
 }
 
@@ -383,18 +437,29 @@ func (i endpointIndex) findByHost(host string) (string, bool) {
 	return "", false
 }
 
-func (i endpointIndex) candidates(host string, port int, database string) []string {
+func (i endpointIndex) candidatesExact(host string, port int, database string) []string {
 	database = normalizeDB(database)
+	if database == "" {
+		return nil
+	}
 	out := make([]string, 0)
 	for _, variant := range canonicalHostVariants(host) {
 		if variant == "" {
 			continue
 		}
 
-		if database != "" {
-			for _, c := range i.byHostPortDB[hostPortDBKey(variant, port, database)] {
-				out = appendUnique(out, c)
-			}
+		for _, c := range i.byHostPortDB[hostPortDBKey(variant, port, database)] {
+			out = appendUnique(out, c)
+		}
+	}
+	return out
+}
+
+func (i endpointIndex) candidatesHostPort(host string, port int) []string {
+	out := make([]string, 0)
+	for _, variant := range canonicalHostVariants(host) {
+		if variant == "" {
+			continue
 		}
 
 		for _, c := range i.byHostPort[hostPortKey(variant, port)] {
