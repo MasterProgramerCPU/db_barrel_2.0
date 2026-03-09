@@ -113,15 +113,3 @@ func introspectAll(cfg *config.Config) ([]api.DatabaseInfo, map[int]*driver.Sche
 
 	return databases, schemas
 }
-
-func buildReplication(cfg *config.Config) []api.ReplicationInfo {
-	repl := make([]api.ReplicationInfo, 0, len(cfg.Replication))
-	for _, r := range cfg.Replication {
-		repl = append(repl, api.ReplicationInfo{
-			SourceName: r.SourceName,
-			TargetName: r.TargetName,
-			Type:       r.Type,
-		})
-	}
-	return repl
-}

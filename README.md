@@ -12,6 +12,7 @@ DB Barrel connects to your PostgreSQL, MySQL, MariaDB, and SQLite databases and 
 - **Batch introspection** — register multiple databases in one JSON config; all are introspected at startup
 - **Interactive ER diagrams** — force-directed table layouts with drag, zoom, and pan
 - **Visual FK relationships** — curved arrows connecting tables along foreign key paths
+- **Replication topology** — auto-discovers PostgreSQL streaming and logical replication links between configured databases
 - **Table detail overlay** — click any table to see columns, types, nullability, primary keys, and foreign keys
 - **Database gallery** — landing page shows all registered databases as draggable cards with official logos
 - **Zero client-side dependencies** — single Go binary with all assets embedded (HTML, CSS, JS, SVGs)
@@ -160,6 +161,31 @@ sudo systemctl start db-barrel
 
 # → http://localhost:8080
 ```
+
+### With Docker
+
+```bash
+# Build image
+docker build -t db-barrel:local .
+
+# Run container (uses bundled SQLite demo config)
+docker run --rm -p 30000:30000 db-barrel:local
+
+# → http://localhost:30000
+```
+
+### With Docker Compose
+
+```bash
+docker compose up --build -d
+
+# → http://localhost:30000
+```
+
+Notes:
+- Default container config is `databases.docker.json` and points to `/data/test_barrel.db`.
+- To use your own databases, mount your JSON config to `/config/databases.json`.
+- PostgreSQL replication links are auto-discovered; optional `replication` entries in config are still accepted and merged.
 
 ---
 

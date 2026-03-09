@@ -1,0 +1,13 @@
+services:
+  db-barrel:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: db-barrel:local
+    container_name: db-barrel
+    ports:
+      - "30000:30000"
+    volumes:
+      - ./databases.docker.json:/config/databases.json:ro
+      - ./testdata/test_barrel.db:/data/test_barrel.db:ro
+    restart: unless-stopped

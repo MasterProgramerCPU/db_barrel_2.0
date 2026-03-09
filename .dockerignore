@@ -1,0 +1,10 @@
+.git
+.gitignore
+db_barrel
+db-barrel
+*.deb
+*.log
+.DS_Store
+tmp
+dist
+node_modules
