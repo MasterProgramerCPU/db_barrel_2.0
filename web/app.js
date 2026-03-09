@@ -157,7 +157,12 @@
 
         // Replication links data
         const replLinks = (replication || []).filter(r => nameMap[r.sourceName] && nameMap[r.targetName])
-            .map(r => ({ source: nameMap[r.sourceName], target: nameMap[r.targetName], type: r.type }));
+            .map(r => ({
+                source: nameMap[r.sourceName],
+                target: nameMap[r.targetName],
+                type: r.type,
+                details: r.details || ''
+            }));
 
         // Orbit lines (between all nodes)
         const orbits = root.append('g');
@@ -170,7 +175,11 @@
         const replPaths = replG.selectAll('.repl-link').data(replLinks).enter()
             .append('path').attr('class', 'repl-link').attr('marker-end', 'url(#repl-arr)');
         const replLabels = replG.selectAll('.repl-label').data(replLinks).enter()
-            .append('text').attr('class', 'repl-label').text(d => d.type || 'replica');
+            .append('text').attr('class', 'repl-label').text(replicationLabel);
+        replLabels.append('title').text(d => {
+            const kind = d.type || 'replica';
+            return d.details ? `${kind}: ${d.details}` : kind;
+        });
 
         const grp = root.append('g');
         const nodeEls = grp.selectAll('.db-node').data(nodes).enter().append('g')
@@ -275,6 +284,13 @@
             .on('drag', (ev, d) => { d.fx = ev.x; d.fy = ev.y; })
             .on('end', (ev, d) => { if (!ev.active) galaxySim.alphaTarget(0); d.fx = null; d.fy = null; });
         nodeEls.call(drag);
+
+        function replicationLabel(d) {
+            const kind = d.type || 'replica';
+            if (!d.details) return kind;
+            const label = `${kind}: ${d.details}`;
+            return label.length > 52 ? label.slice(0, 51) + '…' : label;
+        }
     }
 
     // ---- Open DB ----

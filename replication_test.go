@@ -47,16 +47,33 @@ func TestEndpointIndexFind(t *testing.T) {
 }
 
 func TestMergeReplicationLinksDedupes(t *testing.T) {
-	manual := []api.ReplicationInfo{
-		{SourceName: "Primary", TargetName: "Replica", Type: "streaming"},
-	}
 	auto := []api.ReplicationInfo{
+		{SourceName: "Primary", TargetName: "Replica", Type: "streaming"},
+		{SourceName: "Publisher", TargetName: "Subscriber", Type: "logical", Details: "tables: public.users"},
+	}
+	manual := []api.ReplicationInfo{
 		{SourceName: "Primary", TargetName: "Replica", Type: "streaming"},
 		{SourceName: "Publisher", TargetName: "Subscriber", Type: "logical"},
 	}
 
-	got := mergeReplicationLinks(manual, auto)
+	got := mergeReplicationLinks(auto, manual)
 	if len(got) != 2 {
 		t.Fatalf("expected 2 unique links, got %d: %#v", len(got), got)
+	}
+	if got[1].Details == "" {
+		t.Fatalf("expected logical details to be preserved, got %#v", got[1])
+	}
+}
+
+func TestMatchSourceEndpointFromHostList(t *testing.T) {
+	idx := buildEndpointIndex([]pgEndpoint{
+		{Name: "Primary", Host: "primary.db.local", Port: 5432, Database: "prod"},
+		{Name: "Replica", Host: "replica.db.local", Port: 5432, Database: "prod"},
+	})
+
+	fields := parsePGConnInfo("host=primary.db.local,backup.db.local port=5432,5432 dbname=prod")
+	source, ok := matchSourceEndpoint(fields, idx)
+	if !ok || source != "Primary" {
+		t.Fatalf("expected source Primary, got ok=%v source=%q", ok, source)
 	}
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"fmt"
 	"log"
 	"strconv"
 	"strings"
@@ -19,15 +20,15 @@ type pgEndpoint struct {
 }
 
 type endpointIndex struct {
-	byHostPortDB map[string]string
+	byHostPortDB map[string][]string
 	byHostPort   map[string][]string
 	byHost       map[string][]string
 }
 
 func buildReplication(cfg *config.Config) []api.ReplicationInfo {
-	manual := replicationFromConfig(cfg)
 	auto := discoverPostgresReplication(cfg)
-	return mergeReplicationLinks(manual, auto)
+	manual := replicationFromConfig(cfg)
+	return mergeReplicationLinks(auto, manual)
 }
 
 func replicationFromConfig(cfg *config.Config) []api.ReplicationInfo {
@@ -64,30 +65,28 @@ func discoverPostgresReplication(cfg *config.Config) []api.ReplicationInfo {
 			continue
 		}
 
-		// Streaming replication (standby -> primary mapping via primary_conninfo).
 		if inRecovery, ok := queryBool(db, "SELECT pg_is_in_recovery()"); ok && inRecovery {
-			if primaryConnInfo, ok := queryString(db, "SELECT COALESCE(current_setting('primary_conninfo', true), '')"); ok {
-				fields := parsePGConnInfo(primaryConnInfo)
-				sourceHost := firstNonEmpty(fields["host"], fields["hostaddr"])
-				sourcePort := parsePortDefault(fields["port"], 5432)
-				if sourceName, ok := idx.find(sourceHost, sourcePort, ""); ok && sourceName != ep.Name {
-					links = append(links, api.ReplicationInfo{
-						SourceName: sourceName,
-						TargetName: ep.Name,
-						Type:       "streaming",
-					})
-				}
+			if sourceName, ok := discoverStreamingSourceFromStandby(db, idx); ok && sourceName != ep.Name {
+				links = append(links, api.ReplicationInfo{
+					SourceName: sourceName,
+					TargetName: ep.Name,
+					Type:       "streaming",
+				})
 			}
 		} else if ok {
-			// Best effort fallback if we can only inspect primaries.
-			rows, err := db.Query("SELECT client_addr::text FROM pg_stat_replication WHERE client_addr IS NOT NULL")
+			// Best effort fallback when we can query only the primary side.
+			rows, err := db.Query(`
+				SELECT COALESCE(client_hostname, ''), COALESCE(client_addr::text, '')
+				FROM pg_stat_replication
+			`)
 			if err == nil {
 				for rows.Next() {
-					var clientAddr string
-					if err := rows.Scan(&clientAddr); err != nil {
+					var clientHost, clientAddr string
+					if err := rows.Scan(&clientHost, &clientAddr); err != nil {
 						continue
 					}
-					if targetName, ok := idx.findByHost(clientAddr); ok && targetName != ep.Name {
+					host := firstNonEmpty(clientHost, clientAddr)
+					if targetName, ok := idx.findByHost(host); ok && targetName != ep.Name {
 						links = append(links, api.ReplicationInfo{
 							SourceName: ep.Name,
 							TargetName: targetName,
@@ -99,25 +98,35 @@ func discoverPostgresReplication(cfg *config.Config) []api.ReplicationInfo {
 			}
 		}
 
-		// Logical replication (subscription defines source conninfo).
-		rows, err := db.Query("SELECT subconninfo FROM pg_subscription")
+		// Logical replication (subscription defines source conninfo + replicated tables on subscriber).
+		rows, err := db.Query(`
+			SELECT
+				s.subname,
+				s.subconninfo,
+				COALESCE(string_agg(DISTINCT sr.srrelid::regclass::text, ', '), '') AS tables_csv
+			FROM pg_subscription s
+			LEFT JOIN pg_subscription_rel sr ON sr.srsubid = s.oid
+			GROUP BY s.subname, s.subconninfo
+		`)
 		if err == nil {
 			for rows.Next() {
-				var connInfo string
-				if err := rows.Scan(&connInfo); err != nil {
+				var subName, connInfo, tablesCSV string
+				if err := rows.Scan(&subName, &connInfo, &tablesCSV); err != nil {
 					continue
 				}
+
 				fields := parsePGConnInfo(connInfo)
-				sourceHost := firstNonEmpty(fields["host"], fields["hostaddr"])
-				sourcePort := parsePortDefault(fields["port"], 5432)
-				sourceDB := fields["dbname"]
-				if sourceName, ok := idx.find(sourceHost, sourcePort, sourceDB); ok && sourceName != ep.Name {
-					links = append(links, api.ReplicationInfo{
-						SourceName: sourceName,
-						TargetName: ep.Name,
-						Type:       "logical",
-					})
+				sourceName, ok := matchSourceEndpoint(fields, idx)
+				if !ok || sourceName == ep.Name {
+					continue
 				}
+
+				links = append(links, api.ReplicationInfo{
+					SourceName: sourceName,
+					TargetName: ep.Name,
+					Type:       "logical",
+					Details:    logicalDetails(subName, tablesCSV),
+				})
 			}
 			rows.Close()
 		}
@@ -126,6 +135,112 @@ func discoverPostgresReplication(cfg *config.Config) []api.ReplicationInfo {
 	}
 
 	return dedupeReplicationLinks(links)
+}
+
+func discoverStreamingSourceFromStandby(db *sql.DB, idx endpointIndex) (string, bool) {
+	connInfoCandidates := make([]string, 0, 2)
+
+	// primary_conninfo is often available on standbys.
+	if primaryConnInfo, ok := queryString(db, "SELECT COALESCE(current_setting('primary_conninfo', true), '')"); ok && strings.TrimSpace(primaryConnInfo) != "" {
+		connInfoCandidates = append(connInfoCandidates, primaryConnInfo)
+	}
+
+	// Fallback for setups where current_setting is unavailable/restricted.
+	if walConnInfo, ok := queryString(db, "SELECT COALESCE(conninfo, '') FROM pg_stat_wal_receiver LIMIT 1"); ok && strings.TrimSpace(walConnInfo) != "" {
+		connInfoCandidates = append(connInfoCandidates, walConnInfo)
+	}
+
+	for _, connInfo := range connInfoCandidates {
+		fields := parsePGConnInfo(connInfo)
+		if sourceName, ok := matchSourceEndpoint(fields, idx); ok {
+			return sourceName, true
+		}
+	}
+
+	return "", false
+}
+
+func matchSourceEndpoint(fields map[string]string, idx endpointIndex) (string, bool) {
+	hosts := parseConnHosts(fields)
+	if len(hosts) == 0 {
+		return "", false
+	}
+
+	dbName := fields["dbname"]
+	ports := parseConnPorts(fields["port"], len(hosts), 5432)
+
+	// Prefer exact host:port:dbname when available.
+	for i, host := range hosts {
+		port := ports[i]
+		if sourceName, ok := idx.find(host, port, dbName); ok {
+			return sourceName, true
+		}
+	}
+
+	// Fallback to host:port unique match.
+	for i, host := range hosts {
+		port := ports[i]
+		if sourceName, ok := idx.find(host, port, ""); ok {
+			return sourceName, true
+		}
+	}
+
+	return "", false
+}
+
+func parseConnHosts(fields map[string]string) []string {
+	hosts := splitCSVTrim(firstNonEmpty(fields["host"], fields["hostaddr"]))
+	out := make([]string, 0, len(hosts))
+	for _, host := range hosts {
+		for _, v := range canonicalHostVariants(host) {
+			out = appendUnique(out, v)
+		}
+	}
+	return out
+}
+
+func parseConnPorts(portValue string, hostsCount int, fallback int) []int {
+	raw := splitCSVTrim(portValue)
+	if len(raw) == 0 {
+		raw = []string{strconv.Itoa(fallback)}
+	}
+
+	ports := make([]int, 0, max(hostsCount, len(raw)))
+	for _, v := range raw {
+		ports = append(ports, parsePortDefault(v, fallback))
+	}
+
+	if hostsCount > 1 && len(ports) == 1 {
+		// Single port applies to all hosts.
+		for len(ports) < hostsCount {
+			ports = append(ports, ports[0])
+		}
+	}
+
+	return ports
+}
+
+func logicalDetails(subName, tablesCSV string) string {
+	tables := splitCSVTrim(tablesCSV)
+	if len(tables) == 0 {
+		if subName == "" {
+			return "tables: unknown"
+		}
+		return "subscription: " + subName
+	}
+
+	maxTables := 4
+	visible := tables
+	suffix := ""
+	if len(tables) > maxTables {
+		visible = tables[:maxTables]
+		suffix = fmt.Sprintf(" +%d", len(tables)-maxTables)
+	}
+
+	if subName == "" {
+		return "tables: " + strings.Join(visible, ", ") + suffix
+	}
+	return "tables: " + strings.Join(visible, ", ") + suffix
 }
 
 func postgresEndpoints(cfg *config.Config) []pgEndpoint {
@@ -151,45 +266,50 @@ func postgresEndpoints(cfg *config.Config) []pgEndpoint {
 
 func buildEndpointIndex(endpoints []pgEndpoint) endpointIndex {
 	idx := endpointIndex{
-		byHostPortDB: make(map[string]string, len(endpoints)),
+		byHostPortDB: make(map[string][]string, len(endpoints)),
 		byHostPort:   make(map[string][]string, len(endpoints)),
 		byHost:       make(map[string][]string, len(endpoints)),
 	}
 	for _, ep := range endpoints {
-		host := normalizeHost(ep.Host)
-		hp := hostPortKey(host, ep.Port)
-		hpd := hostPortDBKey(host, ep.Port, normalizeDB(ep.Database))
-		idx.byHostPortDB[hpd] = ep.Name
-		idx.byHostPort[hp] = appendUnique(idx.byHostPort[hp], ep.Name)
-		idx.byHost[host] = appendUnique(idx.byHost[host], ep.Name)
+		for _, host := range canonicalHostVariants(ep.Host) {
+			hp := hostPortKey(host, ep.Port)
+			hpd := hostPortDBKey(host, ep.Port, normalizeDB(ep.Database))
+			idx.byHostPortDB[hpd] = appendUnique(idx.byHostPortDB[hpd], ep.Name)
+			idx.byHostPort[hp] = appendUnique(idx.byHostPort[hp], ep.Name)
+			idx.byHost[host] = appendUnique(idx.byHost[host], ep.Name)
+		}
 	}
 	return idx
 }
 
 func (i endpointIndex) find(host string, port int, database string) (string, bool) {
-	host = normalizeHost(host)
-	database = normalizeDB(database)
-	if host == "" {
-		return "", false
-	}
-
-	if database != "" {
-		if name, ok := i.byHostPortDB[hostPortDBKey(host, port, database)]; ok {
-			return name, true
+	for _, variant := range canonicalHostVariants(host) {
+		database = normalizeDB(database)
+		if variant == "" {
+			continue
 		}
-	}
 
-	candidates := i.byHostPort[hostPortKey(host, port)]
-	if len(candidates) == 1 {
-		return candidates[0], true
+		if database != "" {
+			candidates := i.byHostPortDB[hostPortDBKey(variant, port, database)]
+			if len(candidates) == 1 {
+				return candidates[0], true
+			}
+		}
+
+		candidates := i.byHostPort[hostPortKey(variant, port)]
+		if len(candidates) == 1 {
+			return candidates[0], true
+		}
 	}
 	return "", false
 }
 
 func (i endpointIndex) findByHost(host string) (string, bool) {
-	candidates := i.byHost[normalizeHost(host)]
-	if len(candidates) == 1 {
-		return candidates[0], true
+	for _, variant := range canonicalHostVariants(host) {
+		candidates := i.byHost[variant]
+		if len(candidates) == 1 {
+			return candidates[0], true
+		}
 	}
 	return "", false
 }
@@ -219,21 +339,30 @@ func mergeReplicationLinks(groups ...[]api.ReplicationInfo) []api.ReplicationInf
 }
 
 func dedupeReplicationLinks(links []api.ReplicationInfo) []api.ReplicationInfo {
-	seen := make(map[string]struct{}, len(links))
+	seen := make(map[string]int, len(links))
 	out := make([]api.ReplicationInfo, 0, len(links))
+
 	for _, l := range links {
 		if l.SourceName == "" || l.TargetName == "" || l.SourceName == l.TargetName {
 			continue
 		}
+
 		key := strings.ToLower(strings.TrimSpace(l.SourceName)) + "|" +
 			strings.ToLower(strings.TrimSpace(l.TargetName)) + "|" +
 			strings.ToLower(strings.TrimSpace(l.Type))
-		if _, ok := seen[key]; ok {
+
+		if idx, ok := seen[key]; ok {
+			if out[idx].Details == "" && strings.TrimSpace(l.Details) != "" {
+				out[idx].Details = strings.TrimSpace(l.Details)
+			}
 			continue
 		}
-		seen[key] = struct{}{}
+
+		l.Details = strings.TrimSpace(l.Details)
+		seen[key] = len(out)
 		out = append(out, l)
 	}
+
 	return out
 }
 
@@ -315,6 +444,34 @@ func normalizeHost(h string) string {
 	return h
 }
 
+func canonicalHostVariants(host string) []string {
+	host = normalizeHost(host)
+	if host == "" {
+		return nil
+	}
+
+	variants := []string{host}
+	switch host {
+	case "localhost":
+		variants = appendUnique(variants, "127.0.0.1")
+		variants = appendUnique(variants, "::1")
+	case "127.0.0.1":
+		variants = appendUnique(variants, "localhost")
+		variants = appendUnique(variants, "::1")
+	case "::1":
+		variants = appendUnique(variants, "localhost")
+		variants = appendUnique(variants, "127.0.0.1")
+	}
+
+	// Allow matching short hostname against FQDN and vice-versa.
+	if strings.Contains(host, ".") {
+		short := strings.Split(host, ".")[0]
+		variants = appendUnique(variants, short)
+	}
+
+	return variants
+}
+
 func normalizeDB(db string) string {
 	return strings.ToLower(strings.TrimSpace(db))
 }
@@ -340,6 +497,18 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
+func splitCSVTrim(s string) []string {
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 func appendUnique(items []string, v string) []string {
 	for _, item := range items {
 		if item == v {
@@ -347,4 +516,11 @@ func appendUnique(items []string, v string) []string {
 		}
 	}
 	return append(items, v)
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }

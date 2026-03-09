@@ -29,6 +29,7 @@ type ReplicationInfo struct {
 	SourceName string `json:"sourceName"`
 	TargetName string `json:"targetName"`
 	Type       string `json:"type"`
+	Details    string `json:"details,omitempty"`
 }
 
 // ErrorResponse is a JSON error envelope.
