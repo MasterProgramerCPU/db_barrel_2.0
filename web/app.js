@@ -157,21 +157,36 @@
             y: H / 2 + (Math.random() - 0.5) * 200,
         }));
 
-        // Build name -> node map for replication links
-        const nameMap = {};
+        // Build exact and normalized lookup maps for replication endpoints.
+        const nameMapExact = {};
+        const nameMapNormalized = {};
         nodes.forEach(n => {
-            const key = normalizeName(n.name);
-            if (key && !nameMap[key]) nameMap[key] = n;
+            const exact = String(n.name || '').trim();
+            if (exact && !nameMapExact[exact]) nameMapExact[exact] = n;
+
+            const normalized = normalizeName(exact);
+            if (!normalized) return;
+            if (!(normalized in nameMapNormalized)) {
+                nameMapNormalized[normalized] = n;
+            } else if (nameMapNormalized[normalized] !== n) {
+                // Ambiguous case-insensitive match; force exact-name matching.
+                nameMapNormalized[normalized] = null;
+            }
         });
 
+        function resolveReplicationNode(name) {
+            const exact = String(name || '').trim();
+            if (exact && nameMapExact[exact]) return nameMapExact[exact];
+            return nameMapNormalized[normalizeName(exact)] || null;
+        }
+
         // Replication links data
-        const replLinks = replication.filter(r => nameMap[normalizeName(r.sourceName)] && nameMap[normalizeName(r.targetName)])
-            .map(r => ({
-                source: nameMap[normalizeName(r.sourceName)],
-                target: nameMap[normalizeName(r.targetName)],
-                type: r.type,
-                details: r.details || ''
-            }));
+        const replLinks = replication.map(r => ({
+            source: resolveReplicationNode(r.sourceName),
+            target: resolveReplicationNode(r.targetName),
+            type: r.type,
+            details: r.details || ''
+        })).filter(r => r.source && r.target && r.source !== r.target);
 
         // Orbit lines (between all nodes)
         const orbits = root.append('g');

@@ -35,12 +35,19 @@ func buildReplication(cfg *config.Config) []api.ReplicationInfo {
 
 func replicationFromConfig(cfg *config.Config) []api.ReplicationInfo {
 	nameLookup := buildCanonicalDBNameLookup(cfg)
-	repl := make([]api.ReplicationInfo, 0, len(cfg.Replication))
-	for _, r := range cfg.Replication {
+	rawLinks := make([]config.ReplicationLink, 0, len(cfg.Replication)+len(cfg.Replications))
+	rawLinks = append(rawLinks, cfg.Replication...)
+	rawLinks = append(rawLinks, cfg.Replications...)
+
+	repl := make([]api.ReplicationInfo, 0, len(rawLinks))
+	for _, r := range rawLinks {
+		source := firstNonEmpty(r.SourceName, r.Source)
+		target := firstNonEmpty(r.TargetName, r.Target)
+		replicationType := firstNonEmpty(r.Type, r.ReplicationType)
 		repl = append(repl, api.ReplicationInfo{
-			SourceName: canonicalDBName(r.SourceName, nameLookup),
-			TargetName: canonicalDBName(r.TargetName, nameLookup),
-			Type:       strings.TrimSpace(r.Type),
+			SourceName: canonicalDBName(source, nameLookup),
+			TargetName: canonicalDBName(target, nameLookup),
+			Type:       strings.TrimSpace(replicationType),
 		})
 	}
 	return repl
