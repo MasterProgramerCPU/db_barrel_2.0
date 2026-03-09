@@ -51,6 +51,8 @@ func discoverPostgresReplication(cfg *config.Config) []api.ReplicationInfo {
 
 	idx := buildEndpointIndex(endpoints)
 	links := make([]api.ReplicationInfo, 0)
+	primarySet := make(map[string]bool, len(endpoints))
+	unmatchedStandbys := make(map[string][]map[string]string)
 
 	for _, ep := range endpoints {
 		db, err := sql.Open("postgres", ep.DSN)
@@ -66,14 +68,18 @@ func discoverPostgresReplication(cfg *config.Config) []api.ReplicationInfo {
 		}
 
 		if inRecovery, ok := queryBool(db, "SELECT pg_is_in_recovery()"); ok && inRecovery {
-			if sourceName, ok := discoverStreamingSourceFromStandby(db, idx); ok && sourceName != ep.Name {
+			if sourceName, ok, connFields := discoverStreamingSourceFromStandby(db, idx); ok && sourceName != ep.Name {
 				links = append(links, api.ReplicationInfo{
 					SourceName: sourceName,
 					TargetName: ep.Name,
 					Type:       "streaming",
 				})
+			} else if len(connFields) > 0 {
+				unmatchedStandbys[ep.Name] = connFields
 			}
 		} else if ok {
+			primarySet[ep.Name] = true
+
 			// Best effort fallback when we can query only the primary side.
 			rows, err := db.Query(`
 				SELECT COALESCE(client_hostname, ''), COALESCE(client_addr::text, '')
@@ -134,10 +140,21 @@ func discoverPostgresReplication(cfg *config.Config) []api.ReplicationInfo {
 		db.Close()
 	}
 
+	primaryNames := mapKeys(primarySet)
+	for standbyName, connFields := range unmatchedStandbys {
+		if sourceName, ok := inferStreamingSource(connFields, idx, primarySet, primaryNames); ok && sourceName != standbyName {
+			links = append(links, api.ReplicationInfo{
+				SourceName: sourceName,
+				TargetName: standbyName,
+				Type:       "streaming",
+			})
+		}
+	}
+
 	return dedupeReplicationLinks(links)
 }
 
-func discoverStreamingSourceFromStandby(db *sql.DB, idx endpointIndex) (string, bool) {
+func discoverStreamingSourceFromStandby(db *sql.DB, idx endpointIndex) (string, bool, []map[string]string) {
 	connInfoCandidates := make([]string, 0, 2)
 
 	// primary_conninfo is often available on standbys.
@@ -150,10 +167,85 @@ func discoverStreamingSourceFromStandby(db *sql.DB, idx endpointIndex) (string, 
 		connInfoCandidates = append(connInfoCandidates, walConnInfo)
 	}
 
+	connFields := make([]map[string]string, 0, len(connInfoCandidates))
 	for _, connInfo := range connInfoCandidates {
 		fields := parsePGConnInfo(connInfo)
+		connFields = append(connFields, fields)
 		if sourceName, ok := matchSourceEndpoint(fields, idx); ok {
-			return sourceName, true
+			return sourceName, true, connFields
+		}
+	}
+
+	return "", false, connFields
+}
+
+func inferStreamingSource(connFields []map[string]string, idx endpointIndex, primarySet map[string]bool, primaryNames []string) (string, bool) {
+	hadCandidates := false
+
+	for _, fields := range connFields {
+		hosts := parseConnHosts(fields)
+		if len(hosts) == 0 {
+			continue
+		}
+
+		dbName := fields["dbname"]
+		ports := parseConnPorts(fields["port"], len(hosts), 5432)
+
+		for i, host := range hosts {
+			port := ports[min(i, len(ports)-1)]
+			candidates := idx.candidates(host, port, dbName)
+			if len(candidates) > 0 {
+				hadCandidates = true
+			}
+			if sourceName, ok := chooseCandidate(candidates, primarySet, primaryNames); ok {
+				return sourceName, true
+			}
+		}
+
+		for i, host := range hosts {
+			port := ports[min(i, len(ports)-1)]
+			candidates := idx.candidates(host, port, "")
+			if len(candidates) > 0 {
+				hadCandidates = true
+			}
+			if sourceName, ok := chooseCandidate(candidates, primarySet, primaryNames); ok {
+				return sourceName, true
+			}
+		}
+	}
+
+	// Last-resort heuristic: one known primary and at least one host/port overlap candidate seen.
+	if hadCandidates && len(primaryNames) == 1 {
+		return primaryNames[0], true
+	}
+	return "", false
+}
+
+func chooseCandidate(candidates []string, primarySet map[string]bool, primaryNames []string) (string, bool) {
+	if len(candidates) == 0 {
+		return "", false
+	}
+	if len(candidates) == 1 {
+		return candidates[0], true
+	}
+
+	primaryCandidates := make([]string, 0, len(candidates))
+	for _, c := range candidates {
+		if primarySet[c] {
+			primaryCandidates = appendUnique(primaryCandidates, c)
+		}
+	}
+
+	if len(primaryCandidates) == 1 {
+		return primaryCandidates[0], true
+	}
+
+	if len(primaryNames) == 1 {
+		only := primaryNames[0]
+		for _, c := range candidates {
+			if c == only {
+				return only, true
+			}
 		}
 	}
 
@@ -189,14 +281,7 @@ func matchSourceEndpoint(fields map[string]string, idx endpointIndex) (string, b
 }
 
 func parseConnHosts(fields map[string]string) []string {
-	hosts := splitCSVTrim(firstNonEmpty(fields["host"], fields["hostaddr"]))
-	out := make([]string, 0, len(hosts))
-	for _, host := range hosts {
-		for _, v := range canonicalHostVariants(host) {
-			out = appendUnique(out, v)
-		}
-	}
-	return out
+	return splitCSVTrim(firstNonEmpty(fields["host"], fields["hostaddr"]))
 }
 
 func parseConnPorts(portValue string, hostsCount int, fallback int) []int {
@@ -283,35 +368,50 @@ func buildEndpointIndex(endpoints []pgEndpoint) endpointIndex {
 }
 
 func (i endpointIndex) find(host string, port int, database string) (string, bool) {
-	for _, variant := range canonicalHostVariants(host) {
-		database = normalizeDB(database)
-		if variant == "" {
-			continue
-		}
-
-		if database != "" {
-			candidates := i.byHostPortDB[hostPortDBKey(variant, port, database)]
-			if len(candidates) == 1 {
-				return candidates[0], true
-			}
-		}
-
-		candidates := i.byHostPort[hostPortKey(variant, port)]
-		if len(candidates) == 1 {
-			return candidates[0], true
-		}
+	candidates := i.candidates(host, port, database)
+	if len(candidates) == 1 {
+		return candidates[0], true
 	}
 	return "", false
 }
 
 func (i endpointIndex) findByHost(host string) (string, bool) {
-	for _, variant := range canonicalHostVariants(host) {
-		candidates := i.byHost[variant]
-		if len(candidates) == 1 {
-			return candidates[0], true
-		}
+	candidates := i.candidatesByHost(host)
+	if len(candidates) == 1 {
+		return candidates[0], true
 	}
 	return "", false
+}
+
+func (i endpointIndex) candidates(host string, port int, database string) []string {
+	database = normalizeDB(database)
+	out := make([]string, 0)
+	for _, variant := range canonicalHostVariants(host) {
+		if variant == "" {
+			continue
+		}
+
+		if database != "" {
+			for _, c := range i.byHostPortDB[hostPortDBKey(variant, port, database)] {
+				out = appendUnique(out, c)
+			}
+		}
+
+		for _, c := range i.byHostPort[hostPortKey(variant, port)] {
+			out = appendUnique(out, c)
+		}
+	}
+	return out
+}
+
+func (i endpointIndex) candidatesByHost(host string) []string {
+	out := make([]string, 0)
+	for _, variant := range canonicalHostVariants(host) {
+		for _, c := range i.byHost[variant] {
+			out = appendUnique(out, c)
+		}
+	}
+	return out
 }
 
 func queryBool(db *sql.DB, q string) (bool, bool) {
@@ -523,4 +623,19 @@ func max(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func mapKeys(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
 }

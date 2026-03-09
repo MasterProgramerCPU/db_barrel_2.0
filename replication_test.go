@@ -77,3 +77,15 @@ func TestMatchSourceEndpointFromHostList(t *testing.T) {
 		t.Fatalf("expected source Primary, got ok=%v source=%q", ok, source)
 	}
 }
+
+func TestMatchSourceEndpointLocalhostVariants(t *testing.T) {
+	idx := buildEndpointIndex([]pgEndpoint{
+		{Name: "Primary", Host: "localhost", Port: 5432, Database: "prod"},
+	})
+
+	fields := parsePGConnInfo("host=127.0.0.1 port=5432 dbname=prod")
+	source, ok := matchSourceEndpoint(fields, idx)
+	if !ok || source != "Primary" {
+		t.Fatalf("expected localhost variant to match Primary, got ok=%v source=%q", ok, source)
+	}
+}
