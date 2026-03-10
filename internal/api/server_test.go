@@ -106,6 +106,9 @@ func TestHandleDatabases(t *testing.T) {
 	if dbs[1].Host != "db.example.com" {
 		t.Errorf("expected host 'db.example.com', got %q", dbs[1].Host)
 	}
+	if rec.Header().Get("Access-Control-Allow-Origin") != "*" {
+		t.Errorf("expected wildcard CORS header, got %q", rec.Header().Get("Access-Control-Allow-Origin"))
+	}
 }
 
 func TestHandleSchemaOK(t *testing.T) {
@@ -219,5 +222,29 @@ func TestHandleTopologyReport(t *testing.T) {
 	}
 	if report.Summary.MergedLinks != 1 {
 		t.Fatalf("expected mergedLinks=1, got %d", report.Summary.MergedLinks)
+	}
+}
+
+func TestCORSReflectsOriginAndHandlesPreflight(t *testing.T) {
+	srv := testServer()
+
+	req := httptest.NewRequest("OPTIONS", "/api/databases", nil)
+	req.Header.Set("Origin", "https://example.com")
+	req.Header.Set("Access-Control-Request-Method", "GET")
+	req.Header.Set("Access-Control-Request-Headers", "Content-Type, X-Custom")
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d", rec.Code)
+	}
+	if rec.Header().Get("Access-Control-Allow-Origin") != "https://example.com" {
+		t.Fatalf("expected reflected origin, got %q", rec.Header().Get("Access-Control-Allow-Origin"))
+	}
+	if rec.Header().Get("Access-Control-Allow-Headers") != "Content-Type, X-Custom" {
+		t.Fatalf("expected reflected request headers, got %q", rec.Header().Get("Access-Control-Allow-Headers"))
+	}
+	if rec.Body.Len() != 0 {
+		t.Fatalf("expected empty preflight body, got %q", rec.Body.String())
 	}
 }

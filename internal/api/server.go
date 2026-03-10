@@ -115,6 +115,11 @@ func NewServer(webFS fs.FS, databases []DatabaseInfo, schemas map[int]*driver.Mu
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	applyCORSHeaders(w, r)
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	s.mux.ServeHTTP(w, r)
 }
 
@@ -198,4 +203,25 @@ func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	if err := json.NewEncoder(w).Encode(data); err != nil {
 		log.Printf("error writing JSON response: %v", err)
 	}
+}
+
+func applyCORSHeaders(w http.ResponseWriter, r *http.Request) {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+	} else {
+		w.Header().Set("Access-Control-Allow-Origin", origin)
+	}
+
+	w.Header().Set("Vary", "Origin")
+	w.Header().Add("Vary", "Access-Control-Request-Method")
+	w.Header().Add("Vary", "Access-Control-Request-Headers")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+
+	reqHeaders := r.Header.Get("Access-Control-Request-Headers")
+	if reqHeaders == "" {
+		reqHeaders = "Content-Type, Authorization, X-Requested-With"
+	}
+	w.Header().Set("Access-Control-Allow-Headers", reqHeaders)
+	w.Header().Set("Access-Control-Expose-Headers", "Content-Type")
 }
