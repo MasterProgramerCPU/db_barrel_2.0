@@ -85,7 +85,7 @@ type ErrorResponse struct {
 }
 
 // ReloadFunc is called by the reload endpoint to re-introspect all databases.
-type ReloadFunc func() ([]DatabaseInfo, map[int]*driver.Schema, []ReplicationInfo, ReplicationReport)
+type ReloadFunc func() ([]DatabaseInfo, map[int]*driver.MultiSchema, []ReplicationInfo, ReplicationReport)
 
 // Server holds the HTTP handler configuration.
 type Server struct {
@@ -93,14 +93,14 @@ type Server struct {
 	mux         *http.ServeMux
 	webFS       fs.FS
 	databases   []DatabaseInfo
-	schemas     map[int]*driver.Schema
+	schemas     map[int]*driver.MultiSchema
 	replication []ReplicationInfo
 	replReport  ReplicationReport
 	reloadFunc  ReloadFunc
 }
 
 // NewServer creates a new API server with pre-introspected database schemas.
-func NewServer(webFS fs.FS, databases []DatabaseInfo, schemas map[int]*driver.Schema, replication []ReplicationInfo, replReport ReplicationReport, reload ReloadFunc) *Server {
+func NewServer(webFS fs.FS, databases []DatabaseInfo, schemas map[int]*driver.MultiSchema, replication []ReplicationInfo, replReport ReplicationReport, reload ReloadFunc) *Server {
 	s := &Server{
 		mux:         http.NewServeMux(),
 		webFS:       webFS,

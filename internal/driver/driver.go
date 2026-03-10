@@ -39,6 +39,7 @@ type CheckConstraint struct {
 // Table represents a database table with its columns, foreign keys, indexes, and constraints.
 type Table struct {
 	Name             string            `json:"name"`
+	Database         string            `json:"database,omitempty"`
 	Columns          []Column          `json:"columns"`
 	ForeignKeys      []ForeignKey      `json:"foreignKeys"`
 	Indexes          []Index           `json:"indexes,omitempty"`
@@ -50,6 +51,17 @@ type Schema struct {
 	Tables []Table `json:"tables"`
 }
 
+// DatabaseSchema groups tables belonging to a single database on a server.
+type DatabaseSchema struct {
+	Name   string  `json:"name"`
+	Tables []Table `json:"tables"`
+}
+
+// MultiSchema represents all databases discovered on a server.
+type MultiSchema struct {
+	Databases []DatabaseSchema `json:"databases"`
+}
+
 // Driver is the interface that database-specific drivers must implement.
 type Driver interface {
 	// Connect opens a connection to the database using the given DSN.
@@ -58,6 +70,10 @@ type Driver interface {
 	Close() error
 	// Introspect reads the database schema and returns it.
 	Introspect() (*Schema, error)
+	// ListDatabases returns all accessible database names on the server.
+	ListDatabases() ([]string, error)
+	// IntrospectAll discovers all databases on the server and introspects each one.
+	IntrospectAll() (*MultiSchema, error)
 }
 
 // registry holds all registered driver constructors.

@@ -18,6 +18,7 @@ func init() {
 type MySQLDriver struct {
 	db     *sql.DB
 	dbName string
+	dsn    string
 }
 
 func (d *MySQLDriver) Connect(dsn string) error {
@@ -30,6 +31,7 @@ func (d *MySQLDriver) Connect(dsn string) error {
 		return fmt.Errorf("mysql ping: %w", err)
 	}
 	d.db = db
+	d.dsn = dsn
 
 	// Determine the current database name for introspection queries.
 	if err := db.QueryRow("SELECT DATABASE()").Scan(&d.dbName); err != nil {
@@ -44,6 +46,59 @@ func (d *MySQLDriver) Close() error {
 		return d.db.Close()
 	}
 	return nil
+}
+
+func (d *MySQLDriver) ListDatabases() ([]string, error) {
+	rows, err := d.db.Query(`
+		SELECT SCHEMA_NAME
+		FROM information_schema.schemata
+		WHERE SCHEMA_NAME NOT IN ('information_schema', 'performance_schema', 'mysql', 'sys')
+		ORDER BY SCHEMA_NAME
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("list databases: %w", err)
+	}
+	defer rows.Close()
+
+	var dbs []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		dbs = append(dbs, name)
+	}
+	return dbs, rows.Err()
+}
+
+func (d *MySQLDriver) IntrospectAll() (*MultiSchema, error) {
+	dbNames, err := d.ListDatabases()
+	if err != nil {
+		return nil, err
+	}
+
+	multi := &MultiSchema{Databases: make([]DatabaseSchema, 0, len(dbNames))}
+	origDB := d.dbName
+	for _, dbName := range dbNames {
+		// Switch database context.
+		d.dbName = dbName
+		schema, err := d.Introspect()
+		if err != nil {
+			continue
+		}
+		if len(schema.Tables) == 0 {
+			continue
+		}
+		for i := range schema.Tables {
+			schema.Tables[i].Database = dbName
+		}
+		multi.Databases = append(multi.Databases, DatabaseSchema{
+			Name:   dbName,
+			Tables: schema.Tables,
+		})
+	}
+	d.dbName = origDB
+	return multi, nil
 }
 
 func (d *MySQLDriver) Introspect() (*Schema, error) {

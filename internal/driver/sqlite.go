@@ -36,6 +36,25 @@ func (d *SQLiteDriver) Close() error {
 	return nil
 }
 
+func (d *SQLiteDriver) ListDatabases() ([]string, error) {
+	return []string{"main"}, nil
+}
+
+func (d *SQLiteDriver) IntrospectAll() (*MultiSchema, error) {
+	schema, err := d.Introspect()
+	if err != nil {
+		return nil, err
+	}
+	for i := range schema.Tables {
+		schema.Tables[i].Database = "main"
+	}
+	return &MultiSchema{
+		Databases: []DatabaseSchema{
+			{Name: "main", Tables: schema.Tables},
+		},
+	}, nil
+}
+
 func (d *SQLiteDriver) Introspect() (*Schema, error) {
 	tables, err := d.getTables()
 	if err != nil {

@@ -12,29 +12,36 @@ import (
 
 func testServer() *Server {
 	// Create test schema
-	schema := &driver.Schema{
-		Tables: []driver.Table{
+	schema := &driver.MultiSchema{
+		Databases: []driver.DatabaseSchema{
 			{
-				Name: "users",
-				Columns: []driver.Column{
-					{Name: "id", DataType: "INTEGER", IsPrimaryKey: true},
-					{Name: "name", DataType: "TEXT"},
-				},
-				Indexes: []driver.Index{
-					{Name: "idx_users_name", Columns: []string{"name"}, IsUnique: false},
-				},
-			},
-			{
-				Name: "posts",
-				Columns: []driver.Column{
-					{Name: "id", DataType: "INTEGER", IsPrimaryKey: true},
-					{Name: "user_id", DataType: "INTEGER"},
-				},
-				ForeignKeys: []driver.ForeignKey{
-					{ConstraintName: "fk_posts_user", ColumnName: "user_id", ReferencedTable: "users", ReferencedColumn: "id"},
-				},
-				Indexes: []driver.Index{
-					{Name: "idx_posts_user_id", Columns: []string{"user_id"}, IsUnique: false},
+				Name: "main",
+				Tables: []driver.Table{
+					{
+						Name:     "users",
+						Database: "main",
+						Columns: []driver.Column{
+							{Name: "id", DataType: "INTEGER", IsPrimaryKey: true},
+							{Name: "name", DataType: "TEXT"},
+						},
+						Indexes: []driver.Index{
+							{Name: "idx_users_name", Columns: []string{"name"}, IsUnique: false},
+						},
+					},
+					{
+						Name:     "posts",
+						Database: "main",
+						Columns: []driver.Column{
+							{Name: "id", DataType: "INTEGER", IsPrimaryKey: true},
+							{Name: "user_id", DataType: "INTEGER"},
+						},
+						ForeignKeys: []driver.ForeignKey{
+							{ConstraintName: "fk_posts_user", ColumnName: "user_id", ReferencedTable: "users", ReferencedColumn: "id"},
+						},
+						Indexes: []driver.Index{
+							{Name: "idx_posts_user_id", Columns: []string{"user_id"}, IsUnique: false},
+						},
+					},
 				},
 			},
 		},
@@ -45,7 +52,7 @@ func testServer() *Server {
 		{ID: 1, Name: "Broken DB", Driver: "postgresql", Status: "error", Error: "connection refused", Host: "db.example.com", Port: 5432},
 	}
 
-	schemas := map[int]*driver.Schema{0: schema}
+	schemas := map[int]*driver.MultiSchema{0: schema}
 	replication := []ReplicationInfo{
 		{SourceName: "Test DB", TargetName: "Broken DB", Type: "streaming"},
 	}
@@ -62,7 +69,7 @@ func testServer() *Server {
 		FinalLinks: replication,
 	}
 
-	reloadFunc := func() ([]DatabaseInfo, map[int]*driver.Schema, []ReplicationInfo, ReplicationReport) {
+	reloadFunc := func() ([]DatabaseInfo, map[int]*driver.MultiSchema, []ReplicationInfo, ReplicationReport) {
 		return databases, schemas, replication, replReport
 	}
 
@@ -112,16 +119,19 @@ func TestHandleSchemaOK(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
 
-	var schema driver.Schema
-	if err := json.NewDecoder(rec.Body).Decode(&schema); err != nil {
+	var multi driver.MultiSchema
+	if err := json.NewDecoder(rec.Body).Decode(&multi); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if len(schema.Tables) != 2 {
-		t.Errorf("expected 2 tables, got %d", len(schema.Tables))
+	if len(multi.Databases) != 1 {
+		t.Errorf("expected 1 database group, got %d", len(multi.Databases))
+	}
+	if len(multi.Databases[0].Tables) != 2 {
+		t.Errorf("expected 2 tables, got %d", len(multi.Databases[0].Tables))
 	}
 	// Verify indexes are present
-	if len(schema.Tables[0].Indexes) != 1 {
-		t.Errorf("expected 1 index on users table, got %d", len(schema.Tables[0].Indexes))
+	if len(multi.Databases[0].Tables[0].Indexes) != 1 {
+		t.Errorf("expected 1 index on users table, got %d", len(multi.Databases[0].Tables[0].Indexes))
 	}
 }
 

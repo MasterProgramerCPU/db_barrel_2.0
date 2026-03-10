@@ -14,7 +14,8 @@ func init() {
 
 // PostgresDriver implements Driver for PostgreSQL databases.
 type PostgresDriver struct {
-	db *sql.DB
+	db  *sql.DB
+	dsn string
 }
 
 func (d *PostgresDriver) Connect(dsn string) error {
@@ -27,6 +28,7 @@ func (d *PostgresDriver) Connect(dsn string) error {
 		return fmt.Errorf("postgres ping: %w", err)
 	}
 	d.db = db
+	d.dsn = dsn
 	return nil
 }
 
@@ -35,6 +37,101 @@ func (d *PostgresDriver) Close() error {
 		return d.db.Close()
 	}
 	return nil
+}
+
+func (d *PostgresDriver) ListDatabases() ([]string, error) {
+	rows, err := d.db.Query(`
+		SELECT datname FROM pg_database
+		WHERE datistemplate = false
+		  AND datallowconn = true
+		ORDER BY datname
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("list databases: %w", err)
+	}
+	defer rows.Close()
+
+	var dbs []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		dbs = append(dbs, name)
+	}
+	return dbs, rows.Err()
+}
+
+func (d *PostgresDriver) IntrospectAll() (*MultiSchema, error) {
+	dbNames, err := d.ListDatabases()
+	if err != nil {
+		return nil, err
+	}
+
+	multi := &MultiSchema{Databases: make([]DatabaseSchema, 0, len(dbNames))}
+	for _, dbName := range dbNames {
+		// Build a DSN for this specific database by replacing the database component.
+		dbDSN := replacePGDatabase(d.dsn, dbName)
+		tmpDrv := &PostgresDriver{}
+		if err := tmpDrv.Connect(dbDSN); err != nil {
+			// Skip databases we can't connect to (e.g., permission denied).
+			continue
+		}
+		schema, err := tmpDrv.Introspect()
+		tmpDrv.Close()
+		if err != nil {
+			continue
+		}
+		if len(schema.Tables) == 0 {
+			continue
+		}
+		// Tag each table with its database name.
+		for i := range schema.Tables {
+			schema.Tables[i].Database = dbName
+		}
+		multi.Databases = append(multi.Databases, DatabaseSchema{
+			Name:   dbName,
+			Tables: schema.Tables,
+		})
+	}
+	return multi, nil
+}
+
+// replacePGDatabase replaces the database name in a PostgreSQL DSN.
+func replacePGDatabase(dsn, newDB string) string {
+	// Handle postgres:// URI format.
+	if strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://") {
+		// Parse as URL, replace the path (which is /dbname).
+		parts := strings.SplitN(dsn, "?", 2)
+		base := parts[0]
+		// Find the last / before any query params — that's the db separator.
+		lastSlash := strings.LastIndex(base, "/")
+		if lastSlash >= 0 {
+			base = base[:lastSlash+1] + newDB
+		}
+		if len(parts) == 2 {
+			return base + "?" + parts[1]
+		}
+		return base
+	}
+	// Key-value format: replace dbname=X.
+	if strings.Contains(dsn, "dbname=") {
+		return replaceKV(dsn, "dbname", newDB)
+	}
+	return dsn + " dbname=" + newDB
+}
+
+func replaceKV(s, key, value string) string {
+	prefix := key + "="
+	idx := strings.Index(s, prefix)
+	if idx < 0 {
+		return s + " " + prefix + value
+	}
+	end := idx + len(prefix)
+	for end < len(s) && s[end] != ' ' && s[end] != '\t' {
+		end++
+	}
+	return s[:idx] + prefix + value + s[end:]
 }
 
 func (d *PostgresDriver) Introspect() (*Schema, error) {

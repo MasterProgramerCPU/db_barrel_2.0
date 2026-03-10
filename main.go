@@ -43,7 +43,7 @@ func main() {
 
 	// Reload function re-reads config and re-introspects
 	cfgPath := *configPath
-	reloadFunc := func() ([]api.DatabaseInfo, map[int]*driver.Schema, []api.ReplicationInfo, api.ReplicationReport) {
+	reloadFunc := func() ([]api.DatabaseInfo, map[int]*driver.MultiSchema, []api.ReplicationInfo, api.ReplicationReport) {
 		newCfg, err := config.Load(cfgPath)
 		if err != nil {
 			log.Printf("❌ Reload failed to load config: %v", err)
@@ -64,9 +64,9 @@ func main() {
 	}
 }
 
-func introspectAll(cfg *config.Config) ([]api.DatabaseInfo, map[int]*driver.Schema) {
+func introspectAll(cfg *config.Config) ([]api.DatabaseInfo, map[int]*driver.MultiSchema) {
 	databases := make([]api.DatabaseInfo, len(cfg.Databases))
-	schemas := make(map[int]*driver.Schema)
+	schemas := make(map[int]*driver.MultiSchema)
 
 	for i, dbCfg := range cfg.Databases {
 		info := api.DatabaseInfo{
@@ -94,7 +94,7 @@ func introspectAll(cfg *config.Config) ([]api.DatabaseInfo, map[int]*driver.Sche
 			continue
 		}
 
-		schema, err := drv.Introspect()
+		multi, err := drv.IntrospectAll()
 		drv.Close()
 		if err != nil {
 			info.Status = "error"
@@ -104,10 +104,15 @@ func introspectAll(cfg *config.Config) ([]api.DatabaseInfo, map[int]*driver.Sche
 			continue
 		}
 
+		totalTables := 0
+		for _, db := range multi.Databases {
+			totalTables += len(db.Tables)
+		}
+
 		info.Status = "ok"
-		info.TableCount = len(schema.Tables)
-		schemas[i] = schema
-		log.Printf("  ✅ [%d] %s — %d tables", i, dbCfg.Name, info.TableCount)
+		info.TableCount = totalTables
+		schemas[i] = multi
+		log.Printf("  ✅ [%d] %s — %d database(s), %d tables", i, dbCfg.Name, len(multi.Databases), totalTables)
 		databases[i] = info
 	}
 

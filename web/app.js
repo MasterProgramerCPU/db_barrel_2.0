@@ -36,9 +36,9 @@
     // XP DB type colors
     const DB_CLR = {
         postgresql: { fill: '#B8D4F0', stroke: '#336791', text: '#003366', hdr: 'linear-gradient(180deg, #4A8CC7 0%, #336791 100%)' },
-        mysql:      { fill: '#FFF0D0', stroke: '#F29111', text: '#8B4500', hdr: 'linear-gradient(180deg, #F5A623 0%, #F29111 100%)' },
-        mariadb:    { fill: '#F0E0D4', stroke: '#C0765A', text: '#5E3322', hdr: 'linear-gradient(180deg, #D4896A 0%, #C0765A 100%)' },
-        sqlite:     { fill: '#D0E8F8', stroke: '#4F9CD0', text: '#1A4970', hdr: 'linear-gradient(180deg, #6AB0DC 0%, #4F9CD0 100%)' },
+        mysql: { fill: '#FFF0D0', stroke: '#F29111', text: '#8B4500', hdr: 'linear-gradient(180deg, #F5A623 0%, #F29111 100%)' },
+        mariadb: { fill: '#F0E0D4', stroke: '#C0765A', text: '#5E3322', hdr: 'linear-gradient(180deg, #D4896A 0%, #C0765A 100%)' },
+        sqlite: { fill: '#D0E8F8', stroke: '#4F9CD0', text: '#1A4970', hdr: 'linear-gradient(180deg, #6AB0DC 0%, #4F9CD0 100%)' },
     };
     const DEF_CLR = { fill: '#E0E0E0', stroke: '#888', text: '#333', hdr: '#888' };
     function clr(d) { return DB_CLR[d] || DEF_CLR; }
@@ -359,12 +359,25 @@
             .on('zoom', ev => root.attr('transform', ev.transform));
         svg.call(zoom);
 
-        const PAD = 10, HDR = 24, ROW = 18, MIN_W = 150;
-        const tN = schema.tables.map(t => {
+        const PAD = 10, HDR = 34, ROW = 18, MIN_W = 150;
+
+        // Flatten tables from all databases.
+        const allTables = [];
+        const dbNames = [];
+        (schema.databases || []).forEach(db => {
+            if (!dbNames.includes(db.name)) dbNames.push(db.name);
+            (db.tables || []).forEach(t => allTables.push({ ...t, _db: db.name }));
+        });
+
+        // Database color palette.
+        const DB_COLORS = ['#2663C9', '#2E8B57', '#D4782F', '#7B4BB3', '#1A8A8A', '#C0392B', '#E67E22', '#8E44AD'];
+
+        const tN = allTables.map(t => {
+            const dbIdx = dbNames.indexOf(t._db);
             const ml = Math.max(t.name.length, ...t.columns.map(c => c.name.length + c.dataType.length + 3));
             const w = Math.max(MIN_W, ml * 7 + PAD * 2 + 26);
             const h = HDR + t.columns.length * ROW + PAD;
-            return { ...t, id: t.name, width: w, height: h, x: 0, y: 0 };
+            return { ...t, id: t._db + '.' + t.name, width: w, height: h, x: 0, y: 0, _dbIdx: dbIdx };
         });
 
         const cr = Math.min(W, H) * 0.3;
@@ -374,11 +387,15 @@
             n.y = H / 2 + Math.sin(a) * cr;
         });
 
-        const tMap = {}; tN.forEach(t => { tMap[t.name] = t; });
+        const tMap = {}; tN.forEach(t => { tMap[t.id] = t; tMap[t.name] = tMap[t.name] || t; });
         const links = [];
-        schema.tables.forEach(t => {
+        allTables.forEach(t => {
             (t.foreignKeys || []).forEach(fk => {
-                if (tMap[fk.referencedTable]) links.push({ source: t.name, target: fk.referencedTable });
+                const sourceId = (t._db || t.database) + '.' + t.name;
+                // Try same-db FK first, then cross-db.
+                const targetId = (t._db || t.database) + '.' + fk.referencedTable;
+                const target = tMap[targetId] || tMap[fk.referencedTable];
+                if (target) links.push({ source: sourceId, target: target.id });
             });
         });
 
@@ -405,15 +422,21 @@
             .attr('width', d => d.width).attr('height', d => d.height)
             .attr('filter', 'url(#tshadow)');
 
-        // Colored header bar
+        // Colored header bar — color by database
         nodeEls.append('rect')
             .attr('width', d => d.width).attr('height', HDR)
             .attr('rx', '3 3 0 0')
-            .attr('fill', (d, i) => TABLE_COLORS[i % numColors]);
+            .attr('fill', d => DB_COLORS[d._dbIdx % DB_COLORS.length]);
+
+        // Database label (small)
+        nodeEls.append('text').attr('class', 'table-db-label')
+            .attr('x', PAD).attr('y', 12)
+            .attr('fill', 'rgba(255,255,255,0.7)').attr('font-size', '9px')
+            .text(d => dbNames.length > 1 ? d._db : '');
 
         // Title
         nodeEls.append('text').attr('class', 'table-title')
-            .attr('x', PAD).attr('y', HDR / 2 + 4).text(d => d.name);
+            .attr('x', PAD).attr('y', HDR / 2 + 8).text(d => d.name);
 
         // Columns
         nodeEls.each(function (td) {
@@ -488,7 +511,13 @@
         let matchCount = 0;
         const matchedTables = new Set();
 
-        currentSchema.tables.forEach(t => {
+        // Flatten tables from databases for search.
+        const allSearchTables = [];
+        (currentSchema.databases || []).forEach(db => {
+            (db.tables || []).forEach(t => allSearchTables.push(t));
+        });
+
+        allSearchTables.forEach(t => {
             const tMatch = t.name.toLowerCase().includes(q);
             const matchedCols = t.columns.filter(c => c.name.toLowerCase().includes(q));
             if (tMatch || matchedCols.length > 0) {
@@ -551,7 +580,14 @@
     }
 
     function showDetail(name) {
-        const t = currentSchema.tables.find(tbl => tbl.name === name);
+        // Find table across all databases.
+        let t = null;
+        if (currentSchema && currentSchema.databases) {
+            for (const db of currentSchema.databases) {
+                t = (db.tables || []).find(tbl => tbl.name === name);
+                if (t) break;
+            }
+        }
         if (!t) return;
         detailTableName.textContent = 'Table Properties — ' + t.name;
         const fkc = new Set((t.foreignKeys || []).map(fk => fk.columnName));
