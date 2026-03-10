@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"github.com/robotelu/db_barrel_2.0/internal/api"
-	"github.com/robotelu/db_barrel_2.0/internal/config"
 )
 
 func TestParsePGConnInfo(t *testing.T) {
@@ -118,63 +117,5 @@ func TestEndpointFindPrefersExactDBOverSharedHostPort(t *testing.T) {
 	name, ok := idx.find("pg.local", 5432, "prod")
 	if !ok || name != "Primary" {
 		t.Fatalf("expected exact db match Primary, got ok=%v name=%q", ok, name)
-	}
-}
-
-func TestReplicationFromConfigCanonicalizesNames(t *testing.T) {
-	cfg := &config.Config{
-		Databases: []config.DatabaseConfig{
-			{Name: "Primary DB"},
-			{Name: "Replica DB"},
-		},
-		Replication: []config.ReplicationLink{
-			{SourceName: " primary db ", TargetName: "REPLICA DB", Type: "streaming"},
-		},
-	}
-
-	links := replicationFromConfig(cfg)
-	if len(links) != 1 {
-		t.Fatalf("expected 1 link, got %d", len(links))
-	}
-	if links[0].SourceName != "Primary DB" {
-		t.Fatalf("expected canonical source name, got %q", links[0].SourceName)
-	}
-	if links[0].TargetName != "Replica DB" {
-		t.Fatalf("expected canonical target name, got %q", links[0].TargetName)
-	}
-}
-
-func TestReplicationFromConfigAcceptsAliasFields(t *testing.T) {
-	cfg := &config.Config{
-		Databases: []config.DatabaseConfig{
-			{Name: "Primary DB"},
-			{Name: "Replica DB"},
-			{Name: "Subscriber DB"},
-		},
-		Replication: []config.ReplicationLink{
-			{Source: "primary db", Target: "replica db", ReplicationType: "physical"},
-		},
-		Replications: []config.ReplicationLink{
-			{Source: "Primary DB", TargetName: "subscriber db", Type: "logical"},
-		},
-	}
-
-	links := replicationFromConfig(cfg)
-	if len(links) != 2 {
-		t.Fatalf("expected 2 links, got %d", len(links))
-	}
-
-	if links[0].SourceName != "Primary DB" || links[0].TargetName != "Replica DB" {
-		t.Fatalf("expected aliases to resolve to canonical names, got %#v", links[0])
-	}
-	if links[0].Type != "physical" {
-		t.Fatalf("expected physical type from alias field, got %q", links[0].Type)
-	}
-
-	if links[1].SourceName != "Primary DB" || links[1].TargetName != "Subscriber DB" {
-		t.Fatalf("expected plural replications entry to resolve names, got %#v", links[1])
-	}
-	if links[1].Type != "logical" {
-		t.Fatalf("expected logical type, got %q", links[1].Type)
 	}
 }

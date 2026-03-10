@@ -35,8 +35,6 @@ func buildReplication(cfg *config.Config) []api.ReplicationInfo {
 
 func buildReplicationWithReport(cfg *config.Config) ([]api.ReplicationInfo, api.ReplicationReport) {
 	auto, endpointReports := discoverPostgresReplicationWithReport(cfg)
-	manual, manualReports := replicationFromConfigWithReport(cfg)
-	merged, dropped := mergeReplicationLinksWithDropped(auto, manual)
 
 	endpointErrors := 0
 	for _, ep := range endpointReports {
@@ -48,26 +46,18 @@ func buildReplicationWithReport(cfg *config.Config) ([]api.ReplicationInfo, api.
 		Summary: api.ReplicationSummary{
 			ConfiguredDatabases:         len(cfg.Databases),
 			ConfiguredPostgresDatabases: len(postgresEndpoints(cfg)),
-			ConfiguredManualLinks:       len(cfg.Replication) + len(cfg.Replications),
-			ManualAcceptedLinks:         len(manual),
 			AutoDiscoveredLinks:         len(auto),
-			MergedLinks:                 len(merged),
-			DroppedLinks:                len(dropped),
+			MergedLinks:                 len(auto),
+			DroppedLinks:                0,
 			EndpointErrors:              endpointErrors,
 		},
-		ManualLinks:       manualReports,
 		PostgresEndpoints: endpointReports,
-		DroppedLinks:      dropped,
-		FinalLinks:        append([]api.ReplicationInfo(nil), merged...),
+		FinalLinks:        append([]api.ReplicationInfo(nil), auto...),
 	}
 
-	log.Printf("🔗 Replication summary: postgres_endpoints=%d manual_raw=%d manual_accepted=%d auto_links=%d merged=%d dropped=%d endpoint_errors=%d",
+	log.Printf("🔗 Replication summary: postgres_endpoints=%d auto_links=%d endpoint_errors=%d",
 		report.Summary.ConfiguredPostgresDatabases,
-		report.Summary.ConfiguredManualLinks,
-		report.Summary.ManualAcceptedLinks,
 		report.Summary.AutoDiscoveredLinks,
-		report.Summary.MergedLinks,
-		report.Summary.DroppedLinks,
 		report.Summary.EndpointErrors,
 	)
 
@@ -77,66 +67,11 @@ func buildReplicationWithReport(cfg *config.Config) ([]api.ReplicationInfo, api.
 		}
 		log.Printf("  ⚠️ Replication endpoint %q (%s:%d/%s) errors: %s", ep.Name, ep.Host, ep.Port, ep.Database, strings.Join(ep.Errors, " | "))
 	}
-	if len(merged) == 0 {
+	if len(auto) == 0 {
 		log.Printf("  ⚠️ Replication produced zero links. Check /api/topology/report for diagnostics.")
 	}
 
-	return merged, report
-}
-
-func replicationFromConfig(cfg *config.Config) []api.ReplicationInfo {
-	links, _ := replicationFromConfigWithReport(cfg)
-	return links
-}
-
-func replicationFromConfigWithReport(cfg *config.Config) ([]api.ReplicationInfo, []api.ReplicationManualLinkReport) {
-	nameLookup := buildCanonicalDBNameLookup(cfg)
-	rawLinks := make([]config.ReplicationLink, 0, len(cfg.Replication)+len(cfg.Replications))
-	rawLinks = append(rawLinks, cfg.Replication...)
-	rawLinks = append(rawLinks, cfg.Replications...)
-
-	repl := make([]api.ReplicationInfo, 0, len(rawLinks))
-	report := make([]api.ReplicationManualLinkReport, 0, len(rawLinks))
-	for _, r := range rawLinks {
-		source := firstNonEmpty(r.SourceName, r.Source)
-		target := firstNonEmpty(r.TargetName, r.Target)
-		replicationType := firstNonEmpty(r.Type, r.ReplicationType)
-
-		sourceResolved := canonicalDBName(source, nameLookup)
-		targetResolved := canonicalDBName(target, nameLookup)
-		typeResolved := strings.TrimSpace(replicationType)
-
-		linkReport := api.ReplicationManualLinkReport{
-			SourceInput:    source,
-			TargetInput:    target,
-			TypeInput:      replicationType,
-			SourceResolved: sourceResolved,
-			TargetResolved: targetResolved,
-			TypeResolved:   typeResolved,
-		}
-
-		if sourceResolved == "" || targetResolved == "" {
-			linkReport.Included = false
-			linkReport.Reason = "missing source or target"
-			report = append(report, linkReport)
-			continue
-		}
-		if strings.EqualFold(sourceResolved, targetResolved) {
-			linkReport.Included = false
-			linkReport.Reason = "self-link"
-			report = append(report, linkReport)
-			continue
-		}
-
-		linkReport.Included = true
-		report = append(report, linkReport)
-		repl = append(repl, api.ReplicationInfo{
-			SourceName: sourceResolved,
-			TargetName: targetResolved,
-			Type:       typeResolved,
-		})
-	}
-	return repl, report
+	return auto, report
 }
 
 func discoverPostgresReplication(cfg *config.Config) []api.ReplicationInfo {
@@ -741,14 +676,6 @@ func dedupeReplicationLinksWithDropped(links []api.ReplicationInfo) ([]api.Repli
 	return out, dropped
 }
 
-func mergeReplicationLinksWithDropped(groups ...[]api.ReplicationInfo) ([]api.ReplicationInfo, []api.ReplicationDroppedLink) {
-	combined := make([]api.ReplicationInfo, 0)
-	for _, g := range groups {
-		combined = append(combined, g...)
-	}
-	return dedupeReplicationLinksWithDropped(combined)
-}
-
 func parsePGConnInfo(s string) map[string]string {
 	trimmed := strings.TrimSpace(s)
 	if trimmed == "" {
@@ -872,35 +799,6 @@ func parsePGConnInfoURI(connURI string) map[string]string {
 	}
 
 	return out
-}
-
-func buildCanonicalDBNameLookup(cfg *config.Config) map[string]string {
-	lookup := make(map[string]string, len(cfg.Databases))
-	for _, db := range cfg.Databases {
-		trimmed := strings.TrimSpace(db.Name)
-		key := normalizeDB(trimmed)
-		if key == "" {
-			continue
-		}
-		if existing, ok := lookup[key]; !ok {
-			lookup[key] = trimmed
-		} else if existing != trimmed {
-			// Ambiguous case-insensitive names; keep original values from replication config.
-			lookup[key] = ""
-		}
-	}
-	return lookup
-}
-
-func canonicalDBName(name string, lookup map[string]string) string {
-	trimmed := strings.TrimSpace(name)
-	if trimmed == "" {
-		return ""
-	}
-	if canonical, ok := lookup[normalizeDB(trimmed)]; ok && canonical != "" {
-		return canonical
-	}
-	return trimmed
 }
 
 func parsePortDefault(s string, fallback int) int {

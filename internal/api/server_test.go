@@ -54,8 +54,6 @@ func testServer() *Server {
 		Summary: ReplicationSummary{
 			ConfiguredDatabases:         2,
 			ConfiguredPostgresDatabases: 1,
-			ConfiguredManualLinks:       1,
-			ManualAcceptedLinks:         1,
 			AutoDiscoveredLinks:         0,
 			MergedLinks:                 1,
 			DroppedLinks:                0,

@@ -32,18 +32,6 @@ type ReplicationInfo struct {
 	Details    string `json:"details,omitempty"`
 }
 
-// ReplicationManualLinkReport describes how one config replication entry was interpreted.
-type ReplicationManualLinkReport struct {
-	SourceInput    string `json:"sourceInput"`
-	TargetInput    string `json:"targetInput"`
-	TypeInput      string `json:"typeInput"`
-	SourceResolved string `json:"sourceResolved,omitempty"`
-	TargetResolved string `json:"targetResolved,omitempty"`
-	TypeResolved   string `json:"typeResolved,omitempty"`
-	Included       bool   `json:"included"`
-	Reason         string `json:"reason,omitempty"`
-}
-
 // ReplicationEndpointReport contains per-endpoint discovery diagnostics.
 type ReplicationEndpointReport struct {
 	Name                          string   `json:"name"`
@@ -76,8 +64,6 @@ type ReplicationDroppedLink struct {
 type ReplicationSummary struct {
 	ConfiguredDatabases         int `json:"configuredDatabases"`
 	ConfiguredPostgresDatabases int `json:"configuredPostgresDatabases"`
-	ConfiguredManualLinks       int `json:"configuredManualLinks"`
-	ManualAcceptedLinks         int `json:"manualAcceptedLinks"`
 	AutoDiscoveredLinks         int `json:"autoDiscoveredLinks"`
 	MergedLinks                 int `json:"mergedLinks"`
 	DroppedLinks                int `json:"droppedLinks"`
@@ -86,12 +72,11 @@ type ReplicationSummary struct {
 
 // ReplicationReport contains a verbose snapshot of replication discovery.
 type ReplicationReport struct {
-	GeneratedAt       string                        `json:"generatedAt"`
-	Summary           ReplicationSummary            `json:"summary"`
-	ManualLinks       []ReplicationManualLinkReport `json:"manualLinks,omitempty"`
-	PostgresEndpoints []ReplicationEndpointReport   `json:"postgresEndpoints,omitempty"`
-	DroppedLinks      []ReplicationDroppedLink      `json:"droppedLinks,omitempty"`
-	FinalLinks        []ReplicationInfo             `json:"finalLinks,omitempty"`
+	GeneratedAt       string                      `json:"generatedAt"`
+	Summary           ReplicationSummary          `json:"summary"`
+	PostgresEndpoints []ReplicationEndpointReport `json:"postgresEndpoints,omitempty"`
+	DroppedLinks      []ReplicationDroppedLink    `json:"droppedLinks,omitempty"`
+	FinalLinks        []ReplicationInfo           `json:"finalLinks,omitempty"`
 }
 
 // ErrorResponse is a JSON error envelope.
