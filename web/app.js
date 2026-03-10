@@ -372,6 +372,24 @@
         // Database color palette.
         const DB_COLORS = ['#2663C9', '#2E8B57', '#D4782F', '#7B4BB3', '#1A8A8A', '#C0392B', '#E67E22', '#8E44AD'];
 
+        const dbCenters = new Map();
+        const dbCount = Math.max(dbNames.length, 1);
+        const dbCols = Math.max(1, Math.ceil(Math.sqrt(dbCount)));
+        const dbRows = Math.max(1, Math.ceil(dbCount / dbCols));
+        const dbMarginX = Math.max(140, W * 0.12);
+        const dbMarginY = Math.max(120, H * 0.14);
+        const usableW = Math.max(1, W - dbMarginX * 2);
+        const usableH = Math.max(1, H - dbMarginY * 2);
+
+        dbNames.forEach((dbName, index) => {
+            const col = index % dbCols;
+            const row = Math.floor(index / dbCols);
+            dbCenters.set(dbName, {
+                x: dbMarginX + ((col + 0.5) * usableW) / dbCols,
+                y: dbMarginY + ((row + 0.5) * usableH) / dbRows,
+            });
+        });
+
         const tN = allTables.map(t => {
             const dbIdx = dbNames.indexOf(t._db);
             const ml = Math.max(t.name.length, ...t.columns.map(c => c.name.length + c.dataType.length + 3));
@@ -380,11 +398,16 @@
             return { ...t, id: t._db + '.' + t.name, width: w, height: h, x: 0, y: 0, _dbIdx: dbIdx };
         });
 
-        const cr = Math.min(W, H) * 0.3;
-        tN.forEach((n, i) => {
-            const a = (2 * Math.PI * i) / tN.length - Math.PI / 2;
-            n.x = W / 2 + Math.cos(a) * cr;
-            n.y = H / 2 + Math.sin(a) * cr;
+        const nodesByDB = d3.group(tN, d => d._db);
+        nodesByDB.forEach((nodes, dbName) => {
+            const center = dbCenters.get(dbName) || { x: W / 2, y: H / 2 };
+            const spread = Math.max(70, Math.min(180, 34 + nodes.length * 14));
+            nodes.forEach((node, index) => {
+                const angle = (2 * Math.PI * index) / Math.max(nodes.length, 1) - Math.PI / 2;
+                const radius = spread + (index % 3) * 18;
+                node.x = center.x + Math.cos(angle) * radius;
+                node.y = center.y + Math.sin(angle) * radius;
+            });
         });
 
         const tMap = {}; tN.forEach(t => { tMap[t.id] = t; tMap[t.name] = tMap[t.name] || t; });
@@ -398,6 +421,20 @@
                 if (target) links.push({ source: sourceId, target: target.id });
             });
         });
+
+        const dbGroups = dbNames.map((dbName, index) => ({
+            name: dbName,
+            color: DB_COLORS[index % DB_COLORS.length],
+            nodes: nodesByDB.get(dbName) || [],
+        }));
+
+        const groupG = root.append('g').attr('class', 'db-group-layer');
+        const groupEls = groupG.selectAll('.db-group').data(dbGroups).enter()
+            .append('g').attr('class', 'db-group');
+        groupEls.append('rect').attr('class', 'db-group-border');
+        const groupTagEls = groupEls.append('g').attr('class', 'db-group-tag');
+        groupTagEls.append('rect').attr('class', 'db-group-tag-bg');
+        groupTagEls.append('text').attr('class', 'db-group-tag-text').text(d => d.name);
 
         const linkG = root.append('g');
         const linkEls = linkG.selectAll('.fk-link').data(links).enter()
@@ -457,17 +494,68 @@
         });
 
         const sim = d3.forceSimulation(tN)
-            .force('center', d3.forceCenter(W / 2, H / 2))
             .force('charge', d3.forceManyBody().strength(-800))
             .force('link', d3.forceLink(links).id(d => d.id || d.name || d).distance(240).strength(0.4))
             .force('collision', d3.forceCollide().radius(d => Math.max(d.width, d.height) / 2 + 20))
-            .force('x', d3.forceX(W / 2).strength(0.03))
-            .force('y', d3.forceY(H / 2).strength(0.03))
+            .force('x', d3.forceX(d => (dbCenters.get(d._db) || { x: W / 2 }).x).strength(0.12))
+            .force('y', d3.forceY(d => (dbCenters.get(d._db) || { y: H / 2 }).y).strength(0.12))
             .alphaDecay(0.018)
             .on('tick', () => {
                 nodeEls.attr('transform', d => `translate(${d.x - d.width / 2},${d.y - d.height / 2})`);
+                updateGroupBorders();
                 updateLinks();
             });
+
+        updateGroupBorders();
+
+        function updateGroupBorders() {
+            const groupPadX = 28;
+            const groupPadY = 26;
+            const tagHeight = 22;
+
+            groupEls.each(function (group) {
+                if (!group.nodes.length) return;
+
+                let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+                group.nodes.forEach(node => {
+                    minX = Math.min(minX, node.x - node.width / 2);
+                    minY = Math.min(minY, node.y - node.height / 2);
+                    maxX = Math.max(maxX, node.x + node.width / 2);
+                    maxY = Math.max(maxY, node.y + node.height / 2);
+                });
+
+                minX -= groupPadX;
+                maxX += groupPadX;
+                minY -= groupPadY + 12;
+                maxY += groupPadY;
+
+                const g = d3.select(this);
+                const tagWidth = Math.max(90, group.name.length * 7 + 22);
+                const tagX = minX + 18;
+                const tagY = minY - tagHeight / 2;
+
+                g.select('.db-group-border')
+                    .attr('x', minX)
+                    .attr('y', minY)
+                    .attr('width', Math.max(1, maxX - minX))
+                    .attr('height', Math.max(1, maxY - minY))
+                    .attr('rx', 18)
+                    .attr('stroke', group.color);
+
+                g.select('.db-group-tag-bg')
+                    .attr('x', tagX)
+                    .attr('y', tagY)
+                    .attr('width', tagWidth)
+                    .attr('height', tagHeight)
+                    .attr('rx', 11)
+                    .attr('stroke', group.color);
+
+                g.select('.db-group-tag-text')
+                    .attr('x', tagX + 12)
+                    .attr('y', tagY + 15)
+                    .attr('fill', group.color);
+            });
+        }
 
         function updateLinks() {
             linkEls.attr('d', d => {

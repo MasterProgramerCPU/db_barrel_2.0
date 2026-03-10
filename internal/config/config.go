@@ -22,9 +22,18 @@ type DatabaseConfig struct {
 	Params   string `json:"params,omitempty"`  // Extra connection parameters
 }
 
+// ReplicationConfig describes a manual replication link between configured databases.
+type ReplicationConfig struct {
+	SourceName string `json:"sourceName"`
+	TargetName string `json:"targetName"`
+	Type       string `json:"type,omitempty"`
+	Details    string `json:"details,omitempty"`
+}
+
 // Config is the top-level configuration structure.
 type Config struct {
-	Databases []DatabaseConfig `json:"databases"`
+	Databases   []DatabaseConfig    `json:"databases"`
+	Replication []ReplicationConfig `json:"replication,omitempty"`
 }
 
 // Load reads and validates a JSON config file.
@@ -62,6 +71,15 @@ func Load(path string) (*Config, error) {
 			if db.Database == "" {
 				return nil, fmt.Errorf("config: database[%d] (%s) missing database", i, db.Name)
 			}
+		}
+	}
+
+	for i, link := range cfg.Replication {
+		if strings.TrimSpace(link.SourceName) == "" {
+			return nil, fmt.Errorf("config: replication[%d] missing sourceName", i)
+		}
+		if strings.TrimSpace(link.TargetName) == "" {
+			return nil, fmt.Errorf("config: replication[%d] missing targetName", i)
 		}
 	}
 

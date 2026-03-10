@@ -26,6 +26,36 @@ type endpointIndex struct {
 	byHostPort   map[string][]string
 	byHost       map[string][]string
 	byDB         map[string][]string
+	byName       map[string][]string
+}
+
+type pgPrimaryClient struct {
+	Hostname        string
+	Address         string
+	ApplicationName string
+}
+
+type pgLogicalSubscription struct {
+	Name      string
+	ConnInfo  string
+	TablesCSV string
+}
+
+type pgEndpointObservation struct {
+	Endpoint             pgEndpoint
+	Report               api.ReplicationEndpointReport
+	ServerAddress        string
+	ServerPort           int
+	SystemIdentifier     string
+	StandbyConnFields    []map[string]string
+	StandbyProbe         standbyProbeReport
+	PrimaryClients       []pgPrimaryClient
+	LogicalSubscriptions []pgLogicalSubscription
+}
+
+type standbySourceResolution struct {
+	SourceName string
+	Note       string
 }
 
 func buildReplication(cfg *config.Config) []api.ReplicationInfo {
@@ -35,6 +65,9 @@ func buildReplication(cfg *config.Config) []api.ReplicationInfo {
 
 func buildReplicationWithReport(cfg *config.Config) ([]api.ReplicationInfo, api.ReplicationReport) {
 	auto, endpointReports := discoverPostgresReplicationWithReport(cfg)
+	manual := manualReplicationLinks(cfg)
+	combined := append(append(make([]api.ReplicationInfo, 0, len(auto)+len(manual)), auto...), manual...)
+	finalLinks, dropped := dedupeReplicationLinksWithDropped(combined)
 
 	endpointErrors := 0
 	for _, ep := range endpointReports {
@@ -47,12 +80,13 @@ func buildReplicationWithReport(cfg *config.Config) ([]api.ReplicationInfo, api.
 			ConfiguredDatabases:         len(cfg.Databases),
 			ConfiguredPostgresDatabases: len(postgresEndpoints(cfg)),
 			AutoDiscoveredLinks:         len(auto),
-			MergedLinks:                 len(auto),
-			DroppedLinks:                0,
+			MergedLinks:                 len(finalLinks),
+			DroppedLinks:                len(dropped),
 			EndpointErrors:              endpointErrors,
 		},
 		PostgresEndpoints: endpointReports,
-		FinalLinks:        append([]api.ReplicationInfo(nil), auto...),
+		DroppedLinks:      dropped,
+		FinalLinks:        append([]api.ReplicationInfo(nil), finalLinks...),
 	}
 
 	log.Printf("🔗 Replication summary: postgres_endpoints=%d auto_links=%d endpoint_errors=%d",
@@ -67,11 +101,11 @@ func buildReplicationWithReport(cfg *config.Config) ([]api.ReplicationInfo, api.
 		}
 		log.Printf("  ⚠️ Replication endpoint %q (%s:%d/%s) errors: %s", ep.Name, ep.Host, ep.Port, ep.Database, strings.Join(ep.Errors, " | "))
 	}
-	if len(auto) == 0 {
+	if len(finalLinks) == 0 {
 		log.Printf("  ⚠️ Replication produced zero links. Check /api/topology/report for diagnostics.")
 	}
 
-	return auto, report
+	return finalLinks, report
 }
 
 func discoverPostgresReplication(cfg *config.Config) []api.ReplicationInfo {
@@ -85,171 +119,92 @@ func discoverPostgresReplicationWithReport(cfg *config.Config) ([]api.Replicatio
 		return nil, nil
 	}
 
-	idx := buildEndpointIndex(endpoints)
-	links := make([]api.ReplicationInfo, 0)
-	reports := make([]api.ReplicationEndpointReport, 0, len(endpoints))
-	reportIdx := make(map[string]int, len(endpoints))
-	primarySet := make(map[string]bool, len(endpoints))
-	unmatchedStandbys := make(map[string][]map[string]string)
-
+	observations := make([]pgEndpointObservation, 0, len(endpoints))
 	for _, ep := range endpoints {
-		epReport := api.ReplicationEndpointReport{
-			Name:     ep.Name,
-			Host:     ep.Host,
-			Port:     ep.Port,
-			Database: ep.Database,
-		}
+		observations = append(observations, inspectPostgresEndpoint(ep))
+	}
 
-		db, err := sql.Open("postgres", ep.DSN)
-		if err != nil {
-			log.Printf("  ⚠️ [%s] replication discover: open failed: %v", ep.Name, err)
-			epReport.Errors = append(epReport.Errors, "open failed: "+err.Error())
-			reports = append(reports, epReport)
-			reportIdx[ep.Name] = len(reports) - 1
-			continue
-		}
-		epReport.ConnectOK = true
+	idx := buildObservedEndpointIndex(observations)
+	links := make([]api.ReplicationInfo, 0)
+	reports := make([]api.ReplicationEndpointReport, 0, len(observations))
+	reportIdx := make(map[string]int, len(observations))
+	primarySet := make(map[string]bool, len(observations))
+	systemPrimaries := make(map[string][]string)
 
-		if err := db.Ping(); err != nil {
-			log.Printf("  ⚠️ [%s] replication discover: ping failed: %v", ep.Name, err)
-			epReport.Errors = append(epReport.Errors, "ping failed: "+err.Error())
-			db.Close()
-			reports = append(reports, epReport)
-			reportIdx[ep.Name] = len(reports) - 1
-			continue
-		}
-		epReport.PingOK = true
-
-		inRecovery, inRecoveryKnown := queryBool(db, "SELECT pg_is_in_recovery()")
-		epReport.InRecoveryKnown = inRecoveryKnown
-		epReport.InRecovery = inRecovery
-
-		if inRecoveryKnown && inRecovery {
-			sourceName, ok, connFields, probe := discoverStreamingSourceFromStandby(db, idx)
-			if ok && sourceName != ep.Name {
-				links = append(links, api.ReplicationInfo{
-					SourceName: sourceName,
-					TargetName: ep.Name,
-					Type:       "streaming",
-				})
-				epReport.StreamingLinksDetected++
-			} else if len(connFields) > 0 {
-				unmatchedStandbys[ep.Name] = connFields
-			}
-			epReport.PrimaryConnInfoSeen = probe.PrimaryConnInfoSeen
-			epReport.WalReceiverConnInfoSeen = probe.WalReceiverConnInfoSeen
-		} else if inRecoveryKnown {
-			primarySet[ep.Name] = true
-
-			// Best effort fallback when we can query only the primary side.
-			rows, err := db.Query(`
-				SELECT COALESCE(client_hostname, ''), COALESCE(client_addr::text, '')
-				FROM pg_stat_replication
-			`)
-			if err == nil {
-				for rows.Next() {
-					var clientHost, clientAddr string
-					if err := rows.Scan(&clientHost, &clientAddr); err != nil {
-						continue
-					}
-					host := firstNonEmpty(clientHost, clientAddr)
-					if targetName, ok := idx.findByHost(host); ok && targetName != ep.Name {
-						links = append(links, api.ReplicationInfo{
-							SourceName: ep.Name,
-							TargetName: targetName,
-							Type:       "streaming",
-						})
-						epReport.StreamingLinksDetected++
-					}
-				}
-				rows.Close()
-			} else {
-				epReport.Notes = append(epReport.Notes, "pg_stat_replication query failed (insufficient privilege or unsupported)")
-			}
-		} else {
-			epReport.Errors = append(epReport.Errors, "pg_is_in_recovery query failed")
-		}
-
-		// Logical replication (subscription defines source conninfo + replicated tables on subscriber).
-		rows, err := db.Query(`
-			SELECT
-				s.subname,
-				s.subconninfo,
-				COALESCE(string_agg(DISTINCT sr.srrelid::regclass::text, ', '), '') AS tables_csv
-			FROM pg_subscription s
-			LEFT JOIN pg_subscription_rel sr ON sr.srsubid = s.oid
-			GROUP BY s.subname, s.subconninfo
-		`)
-		if err == nil {
-			for rows.Next() {
-				var subName, connInfo, tablesCSV string
-				if err := rows.Scan(&subName, &connInfo, &tablesCSV); err != nil {
-					continue
-				}
-				epReport.LogicalSubscriptionsScanned++
-
-				fields := parsePGConnInfo(connInfo)
-				sourceName, ok := matchSourceEndpoint(fields, idx)
-				if !ok || sourceName == ep.Name {
-					epReport.LogicalSubscriptionsUnmatched++
-					continue
-				}
-
-				links = append(links, api.ReplicationInfo{
-					SourceName: sourceName,
-					TargetName: ep.Name,
-					Type:       "logical",
-					Details:    logicalDetails(subName, tablesCSV),
-				})
-				epReport.LogicalSubscriptionsMatched++
-			}
-			rows.Close()
-		} else {
-			// Fallback when pg_subscription_rel join is not accessible.
-			rows, err = db.Query("SELECT subname, subconninfo FROM pg_subscription")
-			if err == nil {
-				for rows.Next() {
-					var subName, connInfo string
-					if err := rows.Scan(&subName, &connInfo); err != nil {
-						continue
-					}
-					epReport.LogicalSubscriptionsScanned++
-					fields := parsePGConnInfo(connInfo)
-					sourceName, ok := matchSourceEndpoint(fields, idx)
-					if !ok || sourceName == ep.Name {
-						epReport.LogicalSubscriptionsUnmatched++
-						continue
-					}
-					links = append(links, api.ReplicationInfo{
-						SourceName: sourceName,
-						TargetName: ep.Name,
-						Type:       "logical",
-						Details:    logicalDetails(subName, ""),
-					})
-					epReport.LogicalSubscriptionsMatched++
-				}
-				rows.Close()
-			} else {
-				epReport.Notes = append(epReport.Notes, "pg_subscription query failed (subscriber role or insufficient privilege)")
+	for _, obs := range observations {
+		reports = append(reports, obs.Report)
+		reportIdx[obs.Endpoint.Name] = len(reports) - 1
+		if obs.Report.InRecoveryKnown && !obs.Report.InRecovery {
+			primarySet[obs.Endpoint.Name] = true
+			if obs.SystemIdentifier != "" {
+				systemPrimaries[obs.SystemIdentifier] = appendUnique(systemPrimaries[obs.SystemIdentifier], obs.Endpoint.Name)
 			}
 		}
-
-		db.Close()
-		reports = append(reports, epReport)
-		reportIdx[ep.Name] = len(reports) - 1
 	}
 
 	primaryNames := mapKeys(primarySet)
-	for standbyName, connFields := range unmatchedStandbys {
-		if sourceName, ok := inferStreamingSource(connFields, idx, primarySet, primaryNames); ok && sourceName != standbyName {
+	for _, obs := range observations {
+		if obs.Report.InRecoveryKnown && obs.Report.InRecovery {
+			resolution, ok := resolveStandbySource(obs, idx, primarySet, primaryNames, systemPrimaries)
+			if ok && resolution.SourceName != obs.Endpoint.Name {
+				links = append(links, api.ReplicationInfo{
+					SourceName: resolution.SourceName,
+					TargetName: obs.Endpoint.Name,
+					Type:       "streaming",
+				})
+				if idx, ok := reportIdx[obs.Endpoint.Name]; ok {
+					reports[idx].StreamingLinksDetected++
+					if resolution.Note != "" {
+						reports[idx].Notes = append(reports[idx].Notes, resolution.Note)
+					}
+				}
+			}
+			continue
+		}
+
+		if !obs.Report.InRecoveryKnown {
+			continue
+		}
+
+		for _, client := range obs.PrimaryClients {
+			targetName, ok := resolvePrimaryClientTarget(client, idx)
+			if !ok || targetName == obs.Endpoint.Name {
+				continue
+			}
 			links = append(links, api.ReplicationInfo{
-				SourceName: sourceName,
-				TargetName: standbyName,
+				SourceName: obs.Endpoint.Name,
+				TargetName: targetName,
 				Type:       "streaming",
 			})
-			if idx, ok := reportIdx[standbyName]; ok {
+			if idx, ok := reportIdx[obs.Endpoint.Name]; ok {
 				reports[idx].StreamingLinksDetected++
-				reports[idx].Notes = append(reports[idx].Notes, "streaming source inferred from standby conninfo")
+			}
+		}
+	}
+
+	for _, obs := range observations {
+		for _, sub := range obs.LogicalSubscriptions {
+			if idx, ok := reportIdx[obs.Endpoint.Name]; ok {
+				reports[idx].LogicalSubscriptionsScanned++
+			}
+
+			fields := parsePGConnInfo(sub.ConnInfo)
+			sourceName, ok := matchSourceEndpoint(fields, idx)
+			if !ok || sourceName == obs.Endpoint.Name {
+				if idx, ok := reportIdx[obs.Endpoint.Name]; ok {
+					reports[idx].LogicalSubscriptionsUnmatched++
+				}
+				continue
+			}
+
+			links = append(links, api.ReplicationInfo{
+				SourceName: sourceName,
+				TargetName: obs.Endpoint.Name,
+				Type:       "logical",
+				Details:    logicalDetails(sub.Name, sub.TablesCSV),
+			})
+			if idx, ok := reportIdx[obs.Endpoint.Name]; ok {
+				reports[idx].LogicalSubscriptionsMatched++
 			}
 		}
 	}
@@ -263,7 +218,64 @@ type standbyProbeReport struct {
 	WalReceiverConnInfoSeen bool
 }
 
-func discoverStreamingSourceFromStandby(db *sql.DB, idx endpointIndex) (string, bool, []map[string]string, standbyProbeReport) {
+func inspectPostgresEndpoint(ep pgEndpoint) pgEndpointObservation {
+	obs := pgEndpointObservation{
+		Endpoint: ep,
+		Report: api.ReplicationEndpointReport{
+			Name:     ep.Name,
+			Host:     ep.Host,
+			Port:     ep.Port,
+			Database: ep.Database,
+		},
+	}
+
+	db, err := sql.Open("postgres", ep.DSN)
+	if err != nil {
+		log.Printf("  ⚠️ [%s] replication discover: open failed: %v", ep.Name, err)
+		obs.Report.Errors = append(obs.Report.Errors, "open failed: "+err.Error())
+		return obs
+	}
+	defer db.Close()
+	obs.Report.ConnectOK = true
+
+	if err := db.Ping(); err != nil {
+		log.Printf("  ⚠️ [%s] replication discover: ping failed: %v", ep.Name, err)
+		obs.Report.Errors = append(obs.Report.Errors, "ping failed: "+err.Error())
+		return obs
+	}
+	obs.Report.PingOK = true
+
+	obs.Report.InRecovery, obs.Report.InRecoveryKnown = queryBool(db, "SELECT pg_is_in_recovery()")
+	if !obs.Report.InRecoveryKnown {
+		obs.Report.Errors = append(obs.Report.Errors, "pg_is_in_recovery query failed")
+	}
+
+	if addr, ok := queryString(db, "SELECT COALESCE(inet_server_addr()::text, '')"); ok {
+		obs.ServerAddress = strings.TrimSpace(addr)
+	}
+	if port, ok := queryInt(db, "SELECT inet_server_port()"); ok {
+		obs.ServerPort = port
+	}
+	if systemID, ok := queryString(db, "SELECT COALESCE(system_identifier::text, '') FROM pg_control_system()"); ok && strings.TrimSpace(systemID) != "" {
+		obs.SystemIdentifier = strings.TrimSpace(systemID)
+	} else {
+		obs.Report.Notes = append(obs.Report.Notes, "pg_control_system query failed or unavailable")
+	}
+
+	if obs.Report.InRecoveryKnown && obs.Report.InRecovery {
+		obs.StandbyConnFields, obs.StandbyProbe = collectStandbyConnFields(db)
+		obs.Report.PrimaryConnInfoSeen = obs.StandbyProbe.PrimaryConnInfoSeen
+		obs.Report.WalReceiverConnInfoSeen = obs.StandbyProbe.WalReceiverConnInfoSeen
+	} else if obs.Report.InRecoveryKnown {
+		obs.PrimaryClients = collectPrimaryClients(db)
+	}
+
+	obs.LogicalSubscriptions = collectLogicalSubscriptions(db)
+
+	return obs
+}
+
+func collectStandbyConnFields(db *sql.DB) ([]map[string]string, standbyProbeReport) {
 	probe := standbyProbeReport{}
 	connInfoCandidates := make([]string, 0, 2)
 
@@ -281,14 +293,10 @@ func discoverStreamingSourceFromStandby(db *sql.DB, idx endpointIndex) (string, 
 
 	connFields := make([]map[string]string, 0, len(connInfoCandidates))
 	for _, connInfo := range connInfoCandidates {
-		fields := parsePGConnInfo(connInfo)
-		connFields = append(connFields, fields)
-		if sourceName, ok := matchSourceEndpoint(fields, idx); ok {
-			return sourceName, true, connFields, probe
-		}
+		connFields = append(connFields, parsePGConnInfo(connInfo))
 	}
 
-	return "", false, connFields, probe
+	return connFields, probe
 }
 
 func inferStreamingSource(connFields []map[string]string, idx endpointIndex, primarySet map[string]bool, primaryNames []string) (string, bool) {
@@ -372,6 +380,44 @@ func chooseCandidate(candidates []string, primarySet map[string]bool, primaryNam
 	return "", false
 }
 
+func resolveStandbySource(obs pgEndpointObservation, idx endpointIndex, primarySet map[string]bool, primaryNames []string, systemPrimaries map[string][]string) (standbySourceResolution, bool) {
+	if sourceName, ok := inferStreamingSource(obs.StandbyConnFields, idx, primarySet, primaryNames); ok {
+		return standbySourceResolution{
+			SourceName: sourceName,
+			Note:       "streaming source matched from standby connection info",
+		}, true
+	}
+
+	if obs.SystemIdentifier != "" {
+		candidates := make([]string, 0)
+		for _, candidate := range systemPrimaries[obs.SystemIdentifier] {
+			if candidate != obs.Endpoint.Name {
+				candidates = appendUnique(candidates, candidate)
+			}
+		}
+		if len(candidates) == 1 {
+			return standbySourceResolution{
+				SourceName: candidates[0],
+				Note:       "streaming source inferred from PostgreSQL system identifier",
+			}, true
+		}
+	}
+
+	return standbySourceResolution{}, false
+}
+
+func resolvePrimaryClientTarget(client pgPrimaryClient, idx endpointIndex) (string, bool) {
+	for _, host := range []string{client.Hostname, client.Address} {
+		if targetName, ok := idx.findByHost(host); ok {
+			return targetName, true
+		}
+	}
+	if targetName, ok := idx.findByName(client.ApplicationName); ok {
+		return targetName, true
+	}
+	return "", false
+}
+
 func matchSourceEndpoint(fields map[string]string, idx endpointIndex) (string, bool) {
 	hosts := parseConnHosts(fields)
 	if len(hosts) == 0 {
@@ -442,10 +488,28 @@ func logicalDetails(subName, tablesCSV string) string {
 		suffix = fmt.Sprintf(" +%d", len(tables)-maxTables)
 	}
 
+	details := "tables: " + strings.Join(visible, ", ") + suffix
 	if subName == "" {
-		return "tables: " + strings.Join(visible, ", ") + suffix
+		return details
 	}
-	return "tables: " + strings.Join(visible, ", ") + suffix
+	return subName + " | " + details
+}
+
+func manualReplicationLinks(cfg *config.Config) []api.ReplicationInfo {
+	out := make([]api.ReplicationInfo, 0, len(cfg.Replication))
+	for _, link := range cfg.Replication {
+		linkType := strings.TrimSpace(link.Type)
+		if linkType == "" {
+			linkType = "streaming"
+		}
+		out = append(out, api.ReplicationInfo{
+			SourceName: strings.TrimSpace(link.SourceName),
+			TargetName: strings.TrimSpace(link.TargetName),
+			Type:       linkType,
+			Details:    strings.TrimSpace(link.Details),
+		})
+	}
+	return out
 }
 
 func postgresEndpoints(cfg *config.Config) []pgEndpoint {
@@ -475,21 +539,57 @@ func buildEndpointIndex(endpoints []pgEndpoint) endpointIndex {
 		byHostPort:   make(map[string][]string, len(endpoints)),
 		byHost:       make(map[string][]string, len(endpoints)),
 		byDB:         make(map[string][]string, len(endpoints)),
+		byName:       make(map[string][]string, len(endpoints)),
 	}
 	for _, ep := range endpoints {
-		dbKey := normalizeDB(ep.Database)
-		if dbKey != "" {
-			idx.byDB[dbKey] = appendUnique(idx.byDB[dbKey], ep.Name)
-		}
-		for _, host := range canonicalHostVariants(ep.Host) {
-			hp := hostPortKey(host, ep.Port)
-			hpd := hostPortDBKey(host, ep.Port, dbKey)
-			idx.byHostPortDB[hpd] = appendUnique(idx.byHostPortDB[hpd], ep.Name)
-			idx.byHostPort[hp] = appendUnique(idx.byHostPort[hp], ep.Name)
-			idx.byHost[host] = appendUnique(idx.byHost[host], ep.Name)
-		}
+		addEndpointToIndex(&idx, ep.Name, ep.Database, ep.Port, ep.Host)
 	}
 	return idx
+}
+
+func buildObservedEndpointIndex(observations []pgEndpointObservation) endpointIndex {
+	idx := endpointIndex{
+		byHostPortDB: make(map[string][]string, len(observations)),
+		byHostPort:   make(map[string][]string, len(observations)),
+		byHost:       make(map[string][]string, len(observations)),
+		byDB:         make(map[string][]string, len(observations)),
+		byName:       make(map[string][]string, len(observations)),
+	}
+
+	for _, obs := range observations {
+		addEndpointToIndex(&idx, obs.Endpoint.Name, obs.Endpoint.Database, obs.Endpoint.Port, obs.Endpoint.Host)
+		if obs.ServerAddress != "" {
+			port := obs.ServerPort
+			if port == 0 {
+				port = obs.Endpoint.Port
+			}
+			addEndpointToIndex(&idx, obs.Endpoint.Name, obs.Endpoint.Database, port, obs.ServerAddress)
+		}
+	}
+
+	return idx
+}
+
+func addEndpointToIndex(idx *endpointIndex, name, database string, port int, hosts ...string) {
+	nameKey := strings.ToLower(strings.TrimSpace(name))
+	if nameKey != "" {
+		idx.byName[nameKey] = appendUnique(idx.byName[nameKey], name)
+	}
+
+	dbKey := normalizeDB(database)
+	if dbKey != "" {
+		idx.byDB[dbKey] = appendUnique(idx.byDB[dbKey], name)
+	}
+
+	for _, rawHost := range hosts {
+		for _, host := range canonicalHostVariants(rawHost) {
+			hp := hostPortKey(host, port)
+			hpd := hostPortDBKey(host, port, dbKey)
+			idx.byHostPortDB[hpd] = appendUnique(idx.byHostPortDB[hpd], name)
+			idx.byHostPort[hp] = appendUnique(idx.byHostPort[hp], name)
+			idx.byHost[host] = appendUnique(idx.byHost[host], name)
+		}
+	}
 }
 
 func (i endpointIndex) find(host string, port int, database string) (string, bool) {
@@ -519,6 +619,14 @@ func (i endpointIndex) find(host string, port int, database string) (string, boo
 
 func (i endpointIndex) findByHost(host string) (string, bool) {
 	candidates := i.candidatesByHost(host)
+	if len(candidates) == 1 {
+		return candidates[0], true
+	}
+	return "", false
+}
+
+func (i endpointIndex) findByName(name string) (string, bool) {
+	candidates := i.byName[strings.ToLower(strings.TrimSpace(name))]
 	if len(candidates) == 1 {
 		return candidates[0], true
 	}
@@ -581,6 +689,78 @@ func queryString(db *sql.DB, q string) (string, bool) {
 		return "", false
 	}
 	return v, true
+}
+
+func queryInt(db *sql.DB, q string) (int, bool) {
+	var v int
+	if err := db.QueryRow(q).Scan(&v); err != nil {
+		return 0, false
+	}
+	return v, true
+}
+
+func collectPrimaryClients(db *sql.DB) []pgPrimaryClient {
+	rows, err := db.Query(`
+		SELECT
+			COALESCE(client_hostname, ''),
+			COALESCE(client_addr::text, ''),
+			COALESCE(application_name, '')
+		FROM pg_stat_replication
+	`)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+
+	out := make([]pgPrimaryClient, 0)
+	for rows.Next() {
+		var client pgPrimaryClient
+		if err := rows.Scan(&client.Hostname, &client.Address, &client.ApplicationName); err != nil {
+			continue
+		}
+		out = append(out, client)
+	}
+	return out
+}
+
+func collectLogicalSubscriptions(db *sql.DB) []pgLogicalSubscription {
+	rows, err := db.Query(`
+		SELECT
+			s.subname,
+			s.subconninfo,
+			COALESCE(string_agg(DISTINCT sr.srrelid::regclass::text, ', '), '') AS tables_csv
+		FROM pg_subscription s
+		LEFT JOIN pg_subscription_rel sr ON sr.srsubid = s.oid
+		GROUP BY s.subname, s.subconninfo
+	`)
+	if err == nil {
+		defer rows.Close()
+		out := make([]pgLogicalSubscription, 0)
+		for rows.Next() {
+			var sub pgLogicalSubscription
+			if err := rows.Scan(&sub.Name, &sub.ConnInfo, &sub.TablesCSV); err != nil {
+				continue
+			}
+			out = append(out, sub)
+		}
+		return out
+	}
+
+	rows, err = db.Query("SELECT subname, subconninfo FROM pg_subscription")
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+
+	out := make([]pgLogicalSubscription, 0)
+	for rows.Next() {
+		var sub pgLogicalSubscription
+		if err := rows.Scan(&sub.Name, &sub.ConnInfo); err != nil {
+			continue
+		}
+		out = append(out, sub)
+	}
+	return out
 }
 
 func mergeReplicationLinks(groups ...[]api.ReplicationInfo) []api.ReplicationInfo {

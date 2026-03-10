@@ -410,6 +410,29 @@ body {
 }
 
 /* ---- Schema: Table Node Cards ---- */
+.db-group-layer,
+.db-group-layer * {
+    pointer-events: none;
+}
+
+.db-group-border {
+    fill: rgba(255,255,255,0.12);
+    stroke-width: 2;
+    stroke-dasharray: 5 7;
+    stroke-linecap: round;
+}
+
+.db-group-tag-bg {
+    fill: rgba(245,243,235,0.94);
+    stroke-width: 1.5;
+}
+
+.db-group-tag-text {
+    font-family: 'Tahoma', sans-serif;
+    font-size: 11px;
+    font-weight: bold;
+}
+
 .table-node {
     cursor: pointer;
     transition: filter 0.15s;
