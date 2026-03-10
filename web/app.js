@@ -33,6 +33,13 @@
         return String(v || '').trim().toLowerCase();
     }
 
+    function machineLabel(db) {
+        if (db.driver === 'sqlite') return 'Local machine';
+        if (db.host && db.port) return `${db.host}:${db.port}`;
+        if (db.host) return db.host;
+        return 'Unknown host';
+    }
+
     // XP DB type colors
     const DB_CLR = {
         postgresql: { fill: '#B8D4F0', stroke: '#336791', text: '#003366', hdr: 'linear-gradient(180deg, #4A8CC7 0%, #336791 100%)' },
@@ -151,11 +158,47 @@
         svg.call(zoom);
 
         const NODE_W = 142, NODE_H = 158, ICON_SIZE = 90;
+        const machineNames = [];
+        const machineCenters = new Map();
+        dbs.forEach(db => {
+            const label = machineLabel(db);
+            if (!machineNames.includes(label)) machineNames.push(label);
+        });
+
+        const machineCols = Math.max(1, Math.ceil(Math.sqrt(Math.max(machineNames.length, 1))));
+        const machineRows = Math.max(1, Math.ceil(machineNames.length / machineCols));
+        const machineMarginX = Math.max(160, W * 0.12);
+        const machineMarginY = Math.max(120, H * 0.14);
+        const usableW = Math.max(1, W - machineMarginX * 2);
+        const usableH = Math.max(1, H - machineMarginY * 2);
+
+        machineNames.forEach((name, index) => {
+            const col = index % machineCols;
+            const row = Math.floor(index / machineCols);
+            machineCenters.set(name, {
+                x: machineMarginX + ((col + 0.5) * usableW) / machineCols,
+                y: machineMarginY + ((row + 0.5) * usableH) / machineRows,
+            });
+        });
+
         const nodes = dbs.map((db, i) => ({
             ...db, index: i,
-            x: W / 2 + (Math.random() - 0.5) * 300,
-            y: H / 2 + (Math.random() - 0.5) * 200,
+            _machine: machineLabel(db),
+            x: 0,
+            y: 0,
         }));
+
+        const nodesByMachine = d3.group(nodes, d => d._machine);
+        nodesByMachine.forEach((groupNodes, machine) => {
+            const center = machineCenters.get(machine) || { x: W / 2, y: H / 2 };
+            const spread = Math.max(55, Math.min(150, 38 + groupNodes.length * 12));
+            groupNodes.forEach((node, index) => {
+                const angle = (2 * Math.PI * index) / Math.max(groupNodes.length, 1) - Math.PI / 2;
+                const radius = spread + (index % 2) * 20;
+                node.x = center.x + Math.cos(angle) * radius;
+                node.y = center.y + Math.sin(angle) * radius;
+            });
+        });
 
         // Build exact and normalized lookup maps for replication endpoints.
         const nameMapExact = {};
@@ -188,11 +231,30 @@
             details: r.details || ''
         })).filter(r => r.source && r.target && r.source !== r.target);
 
-        // Orbit lines (between all nodes)
+        const machineGroups = machineNames.map(name => ({
+            name,
+            nodes: nodesByMachine.get(name) || [],
+        }));
+
+        const groupG = root.append('g').attr('class', 'machine-group-layer');
+        const groupEls = groupG.selectAll('.machine-group').data(machineGroups).enter()
+            .append('g').attr('class', 'machine-group');
+        groupEls.append('rect').attr('class', 'machine-group-border');
+        const groupTagEls = groupEls.append('g').attr('class', 'machine-group-tag');
+        groupTagEls.append('rect').attr('class', 'machine-group-tag-bg');
+        groupTagEls.append('text').attr('class', 'machine-group-tag-text').text(d => d.name);
+
+        // Orbit lines (within each machine group)
         const orbits = root.append('g');
-        for (let i = 0; i < nodes.length; i++)
-            for (let j = i + 1; j < nodes.length; j++)
-                orbits.append('line').attr('class', 'orbit-line').attr('data-i', i).attr('data-j', j);
+        machineGroups.forEach(group => {
+            for (let i = 0; i < group.nodes.length; i++) {
+                for (let j = i + 1; j < group.nodes.length; j++) {
+                    orbits.append('line')
+                        .attr('class', 'orbit-line')
+                        .datum({ source: group.nodes[i], target: group.nodes[j] });
+                }
+            }
+        });
 
         // Replication arrow group
         const replG = root.append('g');
@@ -274,19 +336,19 @@
 
         // Force
         galaxySim = d3.forceSimulation(nodes)
-            .force('center', d3.forceCenter(W / 2, H / 2))
             .force('charge', d3.forceManyBody().strength(-500))
             .force('collision', d3.forceCollide().radius(95))
-            .force('x', d3.forceX(W / 2).strength(0.04))
-            .force('y', d3.forceY(H / 2).strength(0.04))
+            .force('x', d3.forceX(d => (machineCenters.get(d._machine) || { x: W / 2 }).x).strength(0.1))
+            .force('y', d3.forceY(d => (machineCenters.get(d._machine) || { y: H / 2 }).y).strength(0.1))
             .alphaDecay(0.015)
             .on('tick', () => {
                 nodeEls.attr('transform', d => `translate(${d.x},${d.y})`);
+                updateMachineBorders();
                 orbits.selectAll('.orbit-line')
-                    .attr('x1', function () { return nodes[+this.dataset.i].x; })
-                    .attr('y1', function () { return nodes[+this.dataset.i].y; })
-                    .attr('x2', function () { return nodes[+this.dataset.j].x; })
-                    .attr('y2', function () { return nodes[+this.dataset.j].y; });
+                    .attr('x1', d => d.source.x)
+                    .attr('y1', d => d.source.y)
+                    .attr('x2', d => d.target.x)
+                    .attr('y2', d => d.target.y);
                 // Update replication arrows
                 replPaths.attr('d', d => {
                     const sx = d.source.x, sy = d.source.y;
@@ -303,11 +365,59 @@
                     .attr('y', d => (d.source.y + d.target.y) / 2 - 8);
             });
 
+        updateMachineBorders();
+
         const drag = d3.drag()
             .on('start', (ev, d) => { if (!ev.active) galaxySim.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
             .on('drag', (ev, d) => { d.fx = ev.x; d.fy = ev.y; })
             .on('end', (ev, d) => { if (!ev.active) galaxySim.alphaTarget(0); d.fx = null; d.fy = null; });
         nodeEls.call(drag);
+
+        function updateMachineBorders() {
+            const padX = 34;
+            const padY = 30;
+            const tagHeight = 24;
+
+            groupEls.each(function (group) {
+                if (!group.nodes.length) return;
+
+                let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+                group.nodes.forEach(node => {
+                    minX = Math.min(minX, node.x - NODE_W / 2);
+                    minY = Math.min(minY, node.y - 28);
+                    maxX = Math.max(maxX, node.x + NODE_W / 2);
+                    maxY = Math.max(maxY, node.y + NODE_H - 28);
+                });
+
+                minX -= padX;
+                maxX += padX;
+                minY -= padY + 12;
+                maxY += padY;
+
+                const tagWidth = Math.max(110, group.name.length * 7 + 24);
+                const tagX = minX + 18;
+                const tagY = minY - tagHeight / 2;
+                const g = d3.select(this);
+
+                g.select('.machine-group-border')
+                    .attr('x', minX)
+                    .attr('y', minY)
+                    .attr('width', Math.max(1, maxX - minX))
+                    .attr('height', Math.max(1, maxY - minY))
+                    .attr('rx', 18);
+
+                g.select('.machine-group-tag-bg')
+                    .attr('x', tagX)
+                    .attr('y', tagY)
+                    .attr('width', tagWidth)
+                    .attr('height', tagHeight)
+                    .attr('rx', 12);
+
+                g.select('.machine-group-tag-text')
+                    .attr('x', tagX + 12)
+                    .attr('y', tagY + 16);
+            });
+        }
 
         function replicationLabel(d) {
             const kind = d.type || 'replica';

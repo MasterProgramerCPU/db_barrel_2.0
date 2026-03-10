@@ -297,6 +297,31 @@ body {
 }
 
 /* ---- Galaxy: DB Node Cards ---- */
+.machine-group-layer,
+.machine-group-layer * {
+    pointer-events: none;
+}
+
+.machine-group-border {
+    fill: rgba(255,255,255,0.08);
+    stroke: rgba(5,96,214,0.55);
+    stroke-width: 2;
+    stroke-dasharray: 6 8;
+}
+
+.machine-group-tag-bg {
+    fill: rgba(245,243,235,0.95);
+    stroke: rgba(5,96,214,0.65);
+    stroke-width: 1.5;
+}
+
+.machine-group-tag-text {
+    font-family: 'Tahoma', sans-serif;
+    font-size: 11px;
+    font-weight: bold;
+    fill: var(--xp-blue-dark);
+}
+
 .orbit-line {
     stroke: var(--border-light);
     stroke-width: 1;

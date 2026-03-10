@@ -94,7 +94,7 @@ func introspectAll(cfg *config.Config) ([]api.DatabaseInfo, map[int]*driver.Mult
 			continue
 		}
 
-		multi, err := drv.IntrospectAll()
+		schema, err := drv.Introspect()
 		drv.Close()
 		if err != nil {
 			info.Status = "error"
@@ -104,15 +104,31 @@ func introspectAll(cfg *config.Config) ([]api.DatabaseInfo, map[int]*driver.Mult
 			continue
 		}
 
-		totalTables := 0
-		for _, db := range multi.Databases {
-			totalTables += len(db.Tables)
+		selectedDBName := dbCfg.Database
+		if selectedDBName == "" {
+			selectedDBName = dbCfg.Name
+		}
+		if selectedDBName == "" {
+			selectedDBName = "main"
+		}
+
+		for j := range schema.Tables {
+			schema.Tables[j].Database = selectedDBName
+		}
+
+		multi := &driver.MultiSchema{
+			Databases: []driver.DatabaseSchema{
+				{
+					Name:   selectedDBName,
+					Tables: schema.Tables,
+				},
+			},
 		}
 
 		info.Status = "ok"
-		info.TableCount = totalTables
+		info.TableCount = len(schema.Tables)
 		schemas[i] = multi
-		log.Printf("  ✅ [%d] %s — %d database(s), %d tables", i, dbCfg.Name, len(multi.Databases), totalTables)
+		log.Printf("  ✅ [%d] %s — database=%s tables=%d", i, dbCfg.Name, selectedDBName, len(schema.Tables))
 		databases[i] = info
 	}
 
