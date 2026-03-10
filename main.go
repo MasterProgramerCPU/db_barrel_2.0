@@ -33,7 +33,7 @@ func main() {
 
 	// Introspect all databases at startup
 	databases, schemas := introspectAll(cfg)
-	replication := buildReplication(cfg)
+	replication, replReport := buildReplicationWithReport(cfg)
 
 	// Prepare web filesystem
 	webFS, err := fs.Sub(webContent, "web")
@@ -43,19 +43,19 @@ func main() {
 
 	// Reload function re-reads config and re-introspects
 	cfgPath := *configPath
-	reloadFunc := func() ([]api.DatabaseInfo, map[int]*driver.Schema, []api.ReplicationInfo) {
+	reloadFunc := func() ([]api.DatabaseInfo, map[int]*driver.Schema, []api.ReplicationInfo, api.ReplicationReport) {
 		newCfg, err := config.Load(cfgPath)
 		if err != nil {
 			log.Printf("❌ Reload failed to load config: %v", err)
-			return databases, schemas, replication
+			return databases, schemas, replication, replReport
 		}
 		log.Printf("📋 Reloaded %d database(s) from %s", len(newCfg.Databases), cfgPath)
 		dbs, schs := introspectAll(newCfg)
-		repl := buildReplication(newCfg)
-		return dbs, schs, repl
+		repl, report := buildReplicationWithReport(newCfg)
+		return dbs, schs, repl, report
 	}
 
-	srv := api.NewServer(webFS, databases, schemas, replication, reloadFunc)
+	srv := api.NewServer(webFS, databases, schemas, replication, replReport, reloadFunc)
 
 	addr := fmt.Sprintf(":%d", *port)
 	log.Printf("🛢  DB Barrel 2.0 starting on http://localhost%s", addr)

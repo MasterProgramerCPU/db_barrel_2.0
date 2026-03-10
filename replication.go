@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/robotelu/db_barrel_2.0/internal/api"
 	"github.com/robotelu/db_barrel_2.0/internal/config"
@@ -28,66 +29,180 @@ type endpointIndex struct {
 }
 
 func buildReplication(cfg *config.Config) []api.ReplicationInfo {
-	auto := discoverPostgresReplication(cfg)
-	manual := replicationFromConfig(cfg)
-	return mergeReplicationLinks(auto, manual)
+	links, _ := buildReplicationWithReport(cfg)
+	return links
+}
+
+func buildReplicationWithReport(cfg *config.Config) ([]api.ReplicationInfo, api.ReplicationReport) {
+	auto, endpointReports := discoverPostgresReplicationWithReport(cfg)
+	manual, manualReports := replicationFromConfigWithReport(cfg)
+	merged, dropped := mergeReplicationLinksWithDropped(auto, manual)
+
+	endpointErrors := 0
+	for _, ep := range endpointReports {
+		endpointErrors += len(ep.Errors)
+	}
+
+	report := api.ReplicationReport{
+		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
+		Summary: api.ReplicationSummary{
+			ConfiguredDatabases:         len(cfg.Databases),
+			ConfiguredPostgresDatabases: len(postgresEndpoints(cfg)),
+			ConfiguredManualLinks:       len(cfg.Replication) + len(cfg.Replications),
+			ManualAcceptedLinks:         len(manual),
+			AutoDiscoveredLinks:         len(auto),
+			MergedLinks:                 len(merged),
+			DroppedLinks:                len(dropped),
+			EndpointErrors:              endpointErrors,
+		},
+		ManualLinks:       manualReports,
+		PostgresEndpoints: endpointReports,
+		DroppedLinks:      dropped,
+		FinalLinks:        append([]api.ReplicationInfo(nil), merged...),
+	}
+
+	log.Printf("🔗 Replication summary: postgres_endpoints=%d manual_raw=%d manual_accepted=%d auto_links=%d merged=%d dropped=%d endpoint_errors=%d",
+		report.Summary.ConfiguredPostgresDatabases,
+		report.Summary.ConfiguredManualLinks,
+		report.Summary.ManualAcceptedLinks,
+		report.Summary.AutoDiscoveredLinks,
+		report.Summary.MergedLinks,
+		report.Summary.DroppedLinks,
+		report.Summary.EndpointErrors,
+	)
+
+	for _, ep := range endpointReports {
+		if len(ep.Errors) == 0 {
+			continue
+		}
+		log.Printf("  ⚠️ Replication endpoint %q (%s:%d/%s) errors: %s", ep.Name, ep.Host, ep.Port, ep.Database, strings.Join(ep.Errors, " | "))
+	}
+	if len(merged) == 0 {
+		log.Printf("  ⚠️ Replication produced zero links. Check /api/topology/report for diagnostics.")
+	}
+
+	return merged, report
 }
 
 func replicationFromConfig(cfg *config.Config) []api.ReplicationInfo {
+	links, _ := replicationFromConfigWithReport(cfg)
+	return links
+}
+
+func replicationFromConfigWithReport(cfg *config.Config) ([]api.ReplicationInfo, []api.ReplicationManualLinkReport) {
 	nameLookup := buildCanonicalDBNameLookup(cfg)
 	rawLinks := make([]config.ReplicationLink, 0, len(cfg.Replication)+len(cfg.Replications))
 	rawLinks = append(rawLinks, cfg.Replication...)
 	rawLinks = append(rawLinks, cfg.Replications...)
 
 	repl := make([]api.ReplicationInfo, 0, len(rawLinks))
+	report := make([]api.ReplicationManualLinkReport, 0, len(rawLinks))
 	for _, r := range rawLinks {
 		source := firstNonEmpty(r.SourceName, r.Source)
 		target := firstNonEmpty(r.TargetName, r.Target)
 		replicationType := firstNonEmpty(r.Type, r.ReplicationType)
+
+		sourceResolved := canonicalDBName(source, nameLookup)
+		targetResolved := canonicalDBName(target, nameLookup)
+		typeResolved := strings.TrimSpace(replicationType)
+
+		linkReport := api.ReplicationManualLinkReport{
+			SourceInput:    source,
+			TargetInput:    target,
+			TypeInput:      replicationType,
+			SourceResolved: sourceResolved,
+			TargetResolved: targetResolved,
+			TypeResolved:   typeResolved,
+		}
+
+		if sourceResolved == "" || targetResolved == "" {
+			linkReport.Included = false
+			linkReport.Reason = "missing source or target"
+			report = append(report, linkReport)
+			continue
+		}
+		if strings.EqualFold(sourceResolved, targetResolved) {
+			linkReport.Included = false
+			linkReport.Reason = "self-link"
+			report = append(report, linkReport)
+			continue
+		}
+
+		linkReport.Included = true
+		report = append(report, linkReport)
 		repl = append(repl, api.ReplicationInfo{
-			SourceName: canonicalDBName(source, nameLookup),
-			TargetName: canonicalDBName(target, nameLookup),
-			Type:       strings.TrimSpace(replicationType),
+			SourceName: sourceResolved,
+			TargetName: targetResolved,
+			Type:       typeResolved,
 		})
 	}
-	return repl
+	return repl, report
 }
 
 func discoverPostgresReplication(cfg *config.Config) []api.ReplicationInfo {
+	links, _ := discoverPostgresReplicationWithReport(cfg)
+	return links
+}
+
+func discoverPostgresReplicationWithReport(cfg *config.Config) ([]api.ReplicationInfo, []api.ReplicationEndpointReport) {
 	endpoints := postgresEndpoints(cfg)
 	if len(endpoints) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	idx := buildEndpointIndex(endpoints)
 	links := make([]api.ReplicationInfo, 0)
+	reports := make([]api.ReplicationEndpointReport, 0, len(endpoints))
+	reportIdx := make(map[string]int, len(endpoints))
 	primarySet := make(map[string]bool, len(endpoints))
 	unmatchedStandbys := make(map[string][]map[string]string)
 
 	for _, ep := range endpoints {
+		epReport := api.ReplicationEndpointReport{
+			Name:     ep.Name,
+			Host:     ep.Host,
+			Port:     ep.Port,
+			Database: ep.Database,
+		}
+
 		db, err := sql.Open("postgres", ep.DSN)
 		if err != nil {
 			log.Printf("  ⚠️ [%s] replication discover: open failed: %v", ep.Name, err)
+			epReport.Errors = append(epReport.Errors, "open failed: "+err.Error())
+			reports = append(reports, epReport)
+			reportIdx[ep.Name] = len(reports) - 1
 			continue
 		}
+		epReport.ConnectOK = true
 
 		if err := db.Ping(); err != nil {
 			log.Printf("  ⚠️ [%s] replication discover: ping failed: %v", ep.Name, err)
+			epReport.Errors = append(epReport.Errors, "ping failed: "+err.Error())
 			db.Close()
+			reports = append(reports, epReport)
+			reportIdx[ep.Name] = len(reports) - 1
 			continue
 		}
+		epReport.PingOK = true
 
-		if inRecovery, ok := queryBool(db, "SELECT pg_is_in_recovery()"); ok && inRecovery {
-			if sourceName, ok, connFields := discoverStreamingSourceFromStandby(db, idx); ok && sourceName != ep.Name {
+		inRecovery, inRecoveryKnown := queryBool(db, "SELECT pg_is_in_recovery()")
+		epReport.InRecoveryKnown = inRecoveryKnown
+		epReport.InRecovery = inRecovery
+
+		if inRecoveryKnown && inRecovery {
+			if sourceName, ok, connFields, probe := discoverStreamingSourceFromStandby(db, idx); ok && sourceName != ep.Name {
 				links = append(links, api.ReplicationInfo{
 					SourceName: sourceName,
 					TargetName: ep.Name,
 					Type:       "streaming",
 				})
+				epReport.StreamingLinksDetected++
 			} else if len(connFields) > 0 {
 				unmatchedStandbys[ep.Name] = connFields
 			}
-		} else if ok {
+			epReport.PrimaryConnInfoSeen = probe.PrimaryConnInfoSeen
+			epReport.WalReceiverConnInfoSeen = probe.WalReceiverConnInfoSeen
+		} else if inRecoveryKnown {
 			primarySet[ep.Name] = true
 
 			// Best effort fallback when we can query only the primary side.
@@ -108,10 +223,15 @@ func discoverPostgresReplication(cfg *config.Config) []api.ReplicationInfo {
 							TargetName: targetName,
 							Type:       "streaming",
 						})
+						epReport.StreamingLinksDetected++
 					}
 				}
 				rows.Close()
+			} else {
+				epReport.Notes = append(epReport.Notes, "pg_stat_replication query failed (insufficient privilege or unsupported)")
 			}
+		} else {
+			epReport.Errors = append(epReport.Errors, "pg_is_in_recovery query failed")
 		}
 
 		// Logical replication (subscription defines source conninfo + replicated tables on subscriber).
@@ -130,10 +250,12 @@ func discoverPostgresReplication(cfg *config.Config) []api.ReplicationInfo {
 				if err := rows.Scan(&subName, &connInfo, &tablesCSV); err != nil {
 					continue
 				}
+				epReport.LogicalSubscriptionsScanned++
 
 				fields := parsePGConnInfo(connInfo)
 				sourceName, ok := matchSourceEndpoint(fields, idx)
 				if !ok || sourceName == ep.Name {
+					epReport.LogicalSubscriptionsUnmatched++
 					continue
 				}
 
@@ -143,6 +265,7 @@ func discoverPostgresReplication(cfg *config.Config) []api.ReplicationInfo {
 					Type:       "logical",
 					Details:    logicalDetails(subName, tablesCSV),
 				})
+				epReport.LogicalSubscriptionsMatched++
 			}
 			rows.Close()
 		} else {
@@ -154,9 +277,11 @@ func discoverPostgresReplication(cfg *config.Config) []api.ReplicationInfo {
 					if err := rows.Scan(&subName, &connInfo); err != nil {
 						continue
 					}
+					epReport.LogicalSubscriptionsScanned++
 					fields := parsePGConnInfo(connInfo)
 					sourceName, ok := matchSourceEndpoint(fields, idx)
 					if !ok || sourceName == ep.Name {
+						epReport.LogicalSubscriptionsUnmatched++
 						continue
 					}
 					links = append(links, api.ReplicationInfo{
@@ -165,12 +290,17 @@ func discoverPostgresReplication(cfg *config.Config) []api.ReplicationInfo {
 						Type:       "logical",
 						Details:    logicalDetails(subName, ""),
 					})
+					epReport.LogicalSubscriptionsMatched++
 				}
 				rows.Close()
+			} else {
+				epReport.Notes = append(epReport.Notes, "pg_subscription query failed (subscriber role or insufficient privilege)")
 			}
 		}
 
 		db.Close()
+		reports = append(reports, epReport)
+		reportIdx[ep.Name] = len(reports) - 1
 	}
 
 	primaryNames := mapKeys(primarySet)
@@ -181,22 +311,35 @@ func discoverPostgresReplication(cfg *config.Config) []api.ReplicationInfo {
 				TargetName: standbyName,
 				Type:       "streaming",
 			})
+			if idx, ok := reportIdx[standbyName]; ok {
+				reports[idx].StreamingLinksDetected++
+				reports[idx].Notes = append(reports[idx].Notes, "streaming source inferred from standby conninfo")
+			}
 		}
 	}
 
-	return dedupeReplicationLinks(links)
+	finalLinks, _ := dedupeReplicationLinksWithDropped(links)
+	return finalLinks, reports
 }
 
-func discoverStreamingSourceFromStandby(db *sql.DB, idx endpointIndex) (string, bool, []map[string]string) {
+type standbyProbeReport struct {
+	PrimaryConnInfoSeen     bool
+	WalReceiverConnInfoSeen bool
+}
+
+func discoverStreamingSourceFromStandby(db *sql.DB, idx endpointIndex) (string, bool, []map[string]string, standbyProbeReport) {
+	probe := standbyProbeReport{}
 	connInfoCandidates := make([]string, 0, 2)
 
 	// primary_conninfo is often available on standbys.
 	if primaryConnInfo, ok := queryString(db, "SELECT COALESCE(current_setting('primary_conninfo', true), '')"); ok && strings.TrimSpace(primaryConnInfo) != "" {
+		probe.PrimaryConnInfoSeen = true
 		connInfoCandidates = append(connInfoCandidates, primaryConnInfo)
 	}
 
 	// Fallback for setups where current_setting is unavailable/restricted.
 	if walConnInfo, ok := queryString(db, "SELECT COALESCE(conninfo, '') FROM pg_stat_wal_receiver LIMIT 1"); ok && strings.TrimSpace(walConnInfo) != "" {
+		probe.WalReceiverConnInfoSeen = true
 		connInfoCandidates = append(connInfoCandidates, walConnInfo)
 	}
 
@@ -205,11 +348,11 @@ func discoverStreamingSourceFromStandby(db *sql.DB, idx endpointIndex) (string, 
 		fields := parsePGConnInfo(connInfo)
 		connFields = append(connFields, fields)
 		if sourceName, ok := matchSourceEndpoint(fields, idx); ok {
-			return sourceName, true, connFields
+			return sourceName, true, connFields, probe
 		}
 	}
 
-	return "", false, connFields
+	return "", false, connFields, probe
 }
 
 func inferStreamingSource(connFields []map[string]string, idx endpointIndex, primarySet map[string]bool, primaryNames []string) (string, bool) {

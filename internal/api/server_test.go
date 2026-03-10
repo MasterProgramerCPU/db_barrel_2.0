@@ -49,12 +49,26 @@ func testServer() *Server {
 	replication := []ReplicationInfo{
 		{SourceName: "Test DB", TargetName: "Broken DB", Type: "streaming"},
 	}
-
-	reloadFunc := func() ([]DatabaseInfo, map[int]*driver.Schema, []ReplicationInfo) {
-		return databases, schemas, replication
+	replReport := ReplicationReport{
+		GeneratedAt: "2026-03-09T00:00:00Z",
+		Summary: ReplicationSummary{
+			ConfiguredDatabases:         2,
+			ConfiguredPostgresDatabases: 1,
+			ConfiguredManualLinks:       1,
+			ManualAcceptedLinks:         1,
+			AutoDiscoveredLinks:         0,
+			MergedLinks:                 1,
+			DroppedLinks:                0,
+			EndpointErrors:              0,
+		},
+		FinalLinks: replication,
 	}
 
-	return NewServer(fstest.MapFS{}, databases, schemas, replication, reloadFunc)
+	reloadFunc := func() ([]DatabaseInfo, map[int]*driver.Schema, []ReplicationInfo, ReplicationReport) {
+		return databases, schemas, replication, replReport
+	}
+
+	return NewServer(fstest.MapFS{}, databases, schemas, replication, replReport, reloadFunc)
 }
 
 func TestHandleDatabases(t *testing.T) {
@@ -177,5 +191,25 @@ func TestHandleTopology(t *testing.T) {
 	}
 	if repl[0].SourceName != "Test DB" {
 		t.Errorf("expected source 'Test DB', got %q", repl[0].SourceName)
+	}
+}
+
+func TestHandleTopologyReport(t *testing.T) {
+	srv := testServer()
+
+	req := httptest.NewRequest("GET", "/api/topology/report", nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var report ReplicationReport
+	if err := json.NewDecoder(rec.Body).Decode(&report); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if report.Summary.MergedLinks != 1 {
+		t.Fatalf("expected mergedLinks=1, got %d", report.Summary.MergedLinks)
 	}
 }
