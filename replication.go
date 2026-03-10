@@ -190,7 +190,8 @@ func discoverPostgresReplicationWithReport(cfg *config.Config) ([]api.Replicatio
 		epReport.InRecovery = inRecovery
 
 		if inRecoveryKnown && inRecovery {
-			if sourceName, ok, connFields, probe := discoverStreamingSourceFromStandby(db, idx); ok && sourceName != ep.Name {
+			sourceName, ok, connFields, probe := discoverStreamingSourceFromStandby(db, idx)
+			if ok && sourceName != ep.Name {
 				links = append(links, api.ReplicationInfo{
 					SourceName: sourceName,
 					TargetName: ep.Name,
