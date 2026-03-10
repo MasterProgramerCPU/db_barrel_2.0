@@ -686,6 +686,68 @@ func dedupeReplicationLinks(links []api.ReplicationInfo) []api.ReplicationInfo {
 	return out
 }
 
+func dedupeReplicationLinksWithDropped(links []api.ReplicationInfo) ([]api.ReplicationInfo, []api.ReplicationDroppedLink) {
+	seen := make(map[string]int, len(links))
+	out := make([]api.ReplicationInfo, 0, len(links))
+	dropped := make([]api.ReplicationDroppedLink, 0)
+
+	for _, l := range links {
+		l.SourceName = strings.TrimSpace(l.SourceName)
+		l.TargetName = strings.TrimSpace(l.TargetName)
+		l.Type = strings.TrimSpace(l.Type)
+		l.Details = strings.TrimSpace(l.Details)
+
+		if l.SourceName == "" || l.TargetName == "" {
+			dropped = append(dropped, api.ReplicationDroppedLink{
+				SourceName: l.SourceName,
+				TargetName: l.TargetName,
+				Type:       l.Type,
+				Reason:     "missing source or target",
+			})
+			continue
+		}
+		if strings.EqualFold(l.SourceName, l.TargetName) {
+			dropped = append(dropped, api.ReplicationDroppedLink{
+				SourceName: l.SourceName,
+				TargetName: l.TargetName,
+				Type:       l.Type,
+				Reason:     "self-link",
+			})
+			continue
+		}
+
+		key := strings.ToLower(strings.TrimSpace(l.SourceName)) + "|" +
+			strings.ToLower(strings.TrimSpace(l.TargetName)) + "|" +
+			strings.ToLower(strings.TrimSpace(l.Type))
+
+		if idx, ok := seen[key]; ok {
+			if out[idx].Details == "" && l.Details != "" {
+				out[idx].Details = l.Details
+			}
+			dropped = append(dropped, api.ReplicationDroppedLink{
+				SourceName: l.SourceName,
+				TargetName: l.TargetName,
+				Type:       l.Type,
+				Reason:     "duplicate",
+			})
+			continue
+		}
+
+		seen[key] = len(out)
+		out = append(out, l)
+	}
+
+	return out, dropped
+}
+
+func mergeReplicationLinksWithDropped(groups ...[]api.ReplicationInfo) ([]api.ReplicationInfo, []api.ReplicationDroppedLink) {
+	combined := make([]api.ReplicationInfo, 0)
+	for _, g := range groups {
+		combined = append(combined, g...)
+	}
+	return dedupeReplicationLinksWithDropped(combined)
+}
+
 func parsePGConnInfo(s string) map[string]string {
 	trimmed := strings.TrimSpace(s)
 	if trimmed == "" {
