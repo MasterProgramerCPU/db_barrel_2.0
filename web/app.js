@@ -15,7 +15,6 @@
     const detailTableName = document.getElementById('detail-table-name');
     const detailContent = document.getElementById('detail-content');
     const closeDetailBtn = document.getElementById('close-detail');
-    const reloadBtn = document.getElementById('reload-btn');
     const deleteModeBtn = document.getElementById('delete-mode-btn');
     const schemaSearch = document.getElementById('schema-search');
     const searchCount = document.getElementById('search-count');
@@ -36,8 +35,6 @@
     const dbSSLModeInput = document.getElementById('db-sslmode-input');
     const dbParamsInput = document.getElementById('db-params-input');
     const dbPathInput = document.getElementById('db-path-input');
-    const reloadLabelDefault = 'Reload';
-    const reloadLabelBusy = 'Reloading...';
     const saveLabelDefault = 'Save';
     const saveLabelBusy = 'Saving...';
 
@@ -109,11 +106,6 @@
         await performReload({ reopenCurrent: false, showToastMessage: true });
     });
 
-    // ---- Reload ----
-    reloadBtn.addEventListener('click', async () => {
-        await performReload({ reopenCurrent: true, showToastMessage: true });
-    });
-
     async function performReload(options) {
         const settings = Object.assign({ reopenCurrent: true, showToastMessage: true }, options || {});
         const previousDbId = currentDbId;
@@ -140,16 +132,13 @@
     }
 
     function setReloadState(isBusy) {
-        reloadBtn.classList.toggle('is-loading', isBusy);
-        reloadBtn.disabled = isBusy;
-        reloadBtn.textContent = isBusy ? reloadLabelBusy : reloadLabelDefault;
+        deleteModeBtn.disabled = isBusy;
     }
 
     function setDeleteMode(isEnabled) {
         deleteMode = Boolean(isEnabled);
         deleteModeBtn.classList.toggle('is-active', deleteMode);
         deleteModeBtn.setAttribute('aria-pressed', String(deleteMode));
-        deleteModeBtn.textContent = deleteMode ? 'Exit Delete' : 'Delete Mode';
         deleteModeBtn.title = deleteMode ? 'Hide delete buttons' : 'Show delete buttons';
         if (!galaxyScreen.hidden) renderGalaxy(databases);
     }

@@ -157,23 +157,14 @@ body {
     box-shadow: inset 0 1px 2px rgba(0,0,0,0.15);
 }
 
-/* Reload button */
-.reload-btn {
-    font-size: 11px;
-    padding: 3px 12px;
-    min-width: 66px;
-}
-
-.reload-btn.is-loading {
-    opacity: 0.85;
-    cursor: progress;
-}
-
 .danger-toggle-btn {
-    min-width: 92px;
+    min-width: 108px;
     border-color: #7A1D1D;
     background: linear-gradient(180deg, #FFF7F7 0%, #EAD8D8 100%);
     color: #5C1414;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
 }
 
 .danger-toggle-btn:hover {
@@ -185,6 +176,48 @@ body {
     background: linear-gradient(180deg, #F58B8B 0%, #C13E3E 100%);
     box-shadow: inset 0 1px 0 rgba(255,255,255,0.28);
     color: var(--text-white);
+}
+
+.danger-toggle-btn:disabled {
+    opacity: 0.75;
+    cursor: progress;
+}
+
+.toggle-check {
+    width: 14px;
+    height: 14px;
+    border: 1px solid #7A1D1D;
+    border-radius: 2px;
+    background: linear-gradient(180deg, #FFFFFF 0%, #F1E7E7 100%);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.85);
+    position: relative;
+    flex-shrink: 0;
+}
+
+.toggle-check::after {
+    content: '';
+    position: absolute;
+    left: 3px;
+    top: 0;
+    width: 4px;
+    height: 8px;
+    border-right: 2px solid transparent;
+    border-bottom: 2px solid transparent;
+    transform: rotate(45deg);
+}
+
+.danger-toggle-btn.is-active .toggle-check {
+    border-color: rgba(255,255,255,0.72);
+    background: linear-gradient(180deg, #FFF2F2 0%, #F5B2B2 100%);
+}
+
+.danger-toggle-btn.is-active .toggle-check::after {
+    border-right-color: #7A1111;
+    border-bottom-color: #7A1111;
+}
+
+.toggle-label {
+    line-height: 1;
 }
 
 /* ---- Screens ---- */
