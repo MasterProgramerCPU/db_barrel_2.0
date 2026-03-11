@@ -348,6 +348,21 @@ body {
     transition: stroke-width 0.15s;
 }
 
+.db-node .node-delete {
+    fill: #C94040;
+    stroke: rgba(255,255,255,0.45);
+    stroke-width: 1;
+}
+
+.db-node .node-delete-label {
+    font-family: 'Tahoma', sans-serif;
+    font-size: 9px;
+    font-weight: bold;
+    fill: var(--text-white);
+    text-anchor: middle;
+    pointer-events: none;
+}
+
 .db-node .node-label {
     font-family: 'Tahoma', sans-serif;
     font-size: 12px;
@@ -604,11 +619,87 @@ body {
     background: linear-gradient(180deg, #F09090 0%, #D95050 100%);
 }
 
+.xp-min-btn {
+    width: 21px;
+    height: 21px;
+    border: 1px solid rgba(255,255,255,0.35);
+    border-radius: 3px;
+    background: linear-gradient(180deg, #F5F5F5 0%, #D8D8D8 100%);
+    color: var(--xp-blue-dark);
+    font-size: 12px;
+    font-weight: bold;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.xp-min-btn:hover {
+    background: linear-gradient(180deg, #FFFFFF 0%, #E2E2E2 100%);
+}
+
 .xp-dialog-body {
     padding: 8px;
     overflow-y: auto;
     flex: 1;
     max-height: calc(100vh - var(--header-height) - 100px);
+}
+
+.panel-title-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.add-db-panel {
+    top: calc(var(--header-height) + 18px);
+    left: 18px;
+    right: auto;
+    width: 300px;
+    max-height: calc(100vh - var(--header-height) - 36px);
+    z-index: 220;
+}
+
+.add-db-panel.is-collapsed .add-db-body {
+    display: none;
+}
+
+.add-db-form {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.form-row {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    font-size: 10px;
+    font-weight: bold;
+    color: var(--xp-blue-dark);
+}
+
+.form-row input,
+.form-row select {
+    font-family: 'Tahoma', sans-serif;
+    font-size: 11px;
+    padding: 4px 6px;
+    border: 1px solid var(--border);
+    border-radius: 2px;
+    background: #fff;
+    color: var(--text);
+}
+
+.form-row input:focus,
+.form-row select:focus {
+    outline: 1px solid var(--xp-blue);
+    border-color: var(--xp-blue);
+}
+
+.form-actions {
+    display: flex;
+    justify-content: flex-end;
+    padding-top: 4px;
 }
 
 .detail-section {

@@ -20,8 +20,25 @@
     const searchCount = document.getElementById('search-count');
     const searchClear = document.getElementById('search-clear');
     const toastEl = document.getElementById('toast');
+    const addDbPanel = document.getElementById('add-db-panel');
+    const addDbBody = document.getElementById('add-db-body');
+    const toggleAddDbBtn = document.getElementById('toggle-add-db');
+    const addDbForm = document.getElementById('add-db-form');
+    const addDbSubmitBtn = document.getElementById('add-db-submit');
+    const dbDriverInput = document.getElementById('db-driver-input');
+    const dbNameInput = document.getElementById('db-name-input');
+    const dbHostInput = document.getElementById('db-host-input');
+    const dbPortInput = document.getElementById('db-port-input');
+    const dbDatabaseInput = document.getElementById('db-database-input');
+    const dbUserInput = document.getElementById('db-user-input');
+    const dbPasswordInput = document.getElementById('db-password-input');
+    const dbSSLModeInput = document.getElementById('db-sslmode-input');
+    const dbParamsInput = document.getElementById('db-params-input');
+    const dbPathInput = document.getElementById('db-path-input');
     const reloadLabelDefault = 'Reload';
     const reloadLabelBusy = 'Reloading...';
+    const saveLabelDefault = 'Save';
+    const saveLabelBusy = 'Saving...';
 
     let databases = [];
     let replication = [];
@@ -83,35 +100,134 @@
         currentDbLabel.hidden = false;
     }
 
-    logoHome.addEventListener('click', showGallery);
+    logoHome.addEventListener('click', async () => {
+        showGallery();
+        await performReload({ reopenCurrent: false, showToastMessage: true });
+    });
 
     // ---- Reload ----
     reloadBtn.addEventListener('click', async () => {
-        reloadBtn.classList.add('is-loading');
-        reloadBtn.disabled = true;
-        reloadBtn.textContent = reloadLabelBusy;
+        await performReload({ reopenCurrent: true, showToastMessage: true });
+    });
+
+    async function performReload(options) {
+        const settings = Object.assign({ reopenCurrent: true, showToastMessage: true }, options || {});
+        const previousDbId = currentDbId;
+        setReloadState(true);
         try {
             const r = await fetch('/api/reload', { method: 'POST' });
             const d = await r.json();
             if (!r.ok) throw new Error(d.error || 'Reload failed');
-            showToast(`✅ Reloaded ${d.databases} database(s)`);
-            // Re-fetch everything
+            if (settings.showToastMessage) showToast(`✅ Reloaded ${d.databases} database(s)`);
             await boot();
-            // If we were viewing a schema, re-open it
-            if (currentDbId !== null) {
-                const db = databases.find(x => x.id === currentDbId);
-                if (db && db.status === 'ok') openDb(db);
+            if (settings.reopenCurrent && previousDbId !== null) {
+                const db = databases.find(x => x.id === previousDbId);
+                if (db && db.status === 'ok') await openDb(db);
                 else showGallery();
+            } else {
+                showGallery();
             }
         } catch (e) {
-            showToast('❌ Reload failed: ' + e.message);
+            if (settings.showToastMessage) showToast('❌ Reload failed: ' + e.message);
             console.error(e);
         } finally {
-            reloadBtn.classList.remove('is-loading');
-            reloadBtn.disabled = false;
-            reloadBtn.textContent = reloadLabelDefault;
+            setReloadState(false);
+        }
+    }
+
+    function setReloadState(isBusy) {
+        reloadBtn.classList.toggle('is-loading', isBusy);
+        reloadBtn.disabled = isBusy;
+        reloadBtn.textContent = isBusy ? reloadLabelBusy : reloadLabelDefault;
+    }
+
+    function updateAddDatabaseFormVisibility() {
+        const driver = dbDriverInput.value;
+        const isSQLite = driver === 'sqlite';
+        document.querySelectorAll('.driver-network').forEach(el => { el.hidden = isSQLite; });
+        document.querySelectorAll('.driver-sqlite').forEach(el => { el.hidden = !isSQLite; });
+        document.querySelectorAll('.driver-postgres').forEach(el => { el.hidden = isSQLite || driver !== 'postgresql'; });
+
+        dbHostInput.required = !isSQLite;
+        dbDatabaseInput.required = !isSQLite;
+        dbPathInput.required = isSQLite;
+
+        if (isSQLite) {
+            dbPortInput.value = '';
+        } else if (!dbPortInput.value) {
+            dbPortInput.value = driver === 'postgresql' ? '5432' : '3306';
+        }
+    }
+
+    toggleAddDbBtn.addEventListener('click', () => {
+        const collapsed = addDbPanel.classList.toggle('is-collapsed');
+        addDbBody.hidden = collapsed;
+        toggleAddDbBtn.textContent = collapsed ? '+' : '_';
+        toggleAddDbBtn.setAttribute('aria-expanded', String(!collapsed));
+    });
+
+    dbDriverInput.addEventListener('change', updateAddDatabaseFormVisibility);
+
+    addDbForm.addEventListener('submit', async ev => {
+        ev.preventDefault();
+        addDbSubmitBtn.disabled = true;
+        addDbSubmitBtn.textContent = saveLabelBusy;
+        try {
+            const payload = {
+                name: dbNameInput.value.trim(),
+                driver: dbDriverInput.value,
+            };
+
+            if (payload.driver === 'sqlite') {
+                payload.path = dbPathInput.value.trim();
+            } else {
+                payload.host = dbHostInput.value.trim();
+                if (dbPortInput.value.trim()) payload.port = Number(dbPortInput.value);
+                payload.database = dbDatabaseInput.value.trim();
+                if (dbUserInput.value.trim()) payload.user = dbUserInput.value.trim();
+                if (dbPasswordInput.value) payload.password = dbPasswordInput.value;
+                if (payload.driver === 'postgresql' && dbSSLModeInput.value.trim()) payload.sslMode = dbSSLModeInput.value.trim();
+                if (dbParamsInput.value.trim()) payload.params = dbParamsInput.value.trim();
+            }
+
+            const r = await fetch('/api/databases', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            const d = await r.json();
+            if (!r.ok) throw new Error(d.error || 'Save failed');
+
+            addDbForm.reset();
+            dbDriverInput.value = 'postgresql';
+            dbSSLModeInput.value = 'disable';
+            updateAddDatabaseFormVisibility();
+            showToast(`✅ Added database. Reloaded ${d.databases} connection(s)`);
+            await boot();
+            showGallery();
+        } catch (e) {
+            showToast('❌ Save failed: ' + e.message);
+            console.error(e);
+        } finally {
+            addDbSubmitBtn.disabled = false;
+            addDbSubmitBtn.textContent = saveLabelDefault;
         }
     });
+
+    async function deleteDatabase(db) {
+        if (!window.confirm(`Delete database "${db.name}" from the config file?`)) return;
+        try {
+            const r = await fetch(`/api/databases/${db.id}`, { method: 'DELETE' });
+            const d = await r.json();
+            if (!r.ok) throw new Error(d.error || 'Delete failed');
+            showToast(`✅ Deleted database. ${d.databases} connection(s) remain`);
+            await boot();
+            showGallery();
+        } catch (e) {
+            showToast('❌ Delete failed: ' + e.message);
+            console.error(e);
+        }
+    }
 
     // ---- Load ----
     async function boot() {
@@ -333,6 +449,23 @@
         nodeEls.filter(d => d.status === 'ok')
             .on('click', (ev, d) => { ev.stopPropagation(); openDb(d); })
             .style('cursor', 'pointer');
+
+        const deleteBtns = nodeEls.append('g')
+            .attr('class', 'node-delete-btn')
+            .attr('transform', `translate(${NODE_W / 2 - 18},${-18})`)
+            .style('cursor', 'pointer')
+            .on('click', (ev, d) => {
+                ev.stopPropagation();
+                deleteDatabase(d);
+            });
+
+        deleteBtns.append('circle')
+            .attr('class', 'node-delete')
+            .attr('r', 9);
+        deleteBtns.append('text')
+            .attr('class', 'node-delete-label')
+            .attr('y', 3)
+            .text('X');
 
         // Force
         galaxySim = d3.forceSimulation(nodes)
@@ -855,5 +988,6 @@
 
     function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
+    updateAddDatabaseFormVisibility();
     boot();
 })();

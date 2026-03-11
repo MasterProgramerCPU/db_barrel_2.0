@@ -55,7 +55,15 @@ func main() {
 		return dbs, schs, repl, report
 	}
 
-	srv := api.NewServer(webFS, databases, schemas, replication, replReport, reloadFunc)
+	addDatabaseFunc := func(dbCfg config.DatabaseConfig) error {
+		return config.AppendDatabase(cfgPath, dbCfg)
+	}
+
+	deleteDatabaseFunc := func(index int) error {
+		return config.RemoveDatabaseAt(cfgPath, index)
+	}
+
+	srv := api.NewServer(webFS, databases, schemas, replication, replReport, reloadFunc, addDatabaseFunc, deleteDatabaseFunc)
 
 	addr := fmt.Sprintf(":%d", *port)
 	log.Printf("🛢  DB Barrel 2.0 starting on http://localhost%s", addr)

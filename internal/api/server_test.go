@@ -2,11 +2,14 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"testing/fstest"
 
+	"github.com/robotelu/db_barrel_2.0/internal/config"
 	"github.com/robotelu/db_barrel_2.0/internal/driver"
 )
 
@@ -73,7 +76,46 @@ func testServer() *Server {
 		return databases, schemas, replication, replReport
 	}
 
-	return NewServer(fstest.MapFS{}, databases, schemas, replication, replReport, reloadFunc)
+	addDBFunc := func(dbCfg config.DatabaseConfig) error {
+		databases = append(databases, DatabaseInfo{
+			ID:         len(databases),
+			Name:       dbCfg.Name,
+			Driver:     dbCfg.Driver,
+			Status:     "ok",
+			TableCount: 0,
+			Host:       dbCfg.Host,
+			Port:       dbCfg.Port,
+		})
+		schemas[len(databases)-1] = &driver.MultiSchema{
+			Databases: []driver.DatabaseSchema{{Name: dbCfg.Database}},
+		}
+		return nil
+	}
+
+	deleteDBFunc := func(index int) error {
+		if index < 0 || index >= len(databases) {
+			return fmt.Errorf("out of range")
+		}
+		databases = append(databases[:index], databases[index+1:]...)
+		reindexed := make([]DatabaseInfo, len(databases))
+		newSchemas := make(map[int]*driver.MultiSchema, len(schemas))
+		for i, db := range databases {
+			db.ID = i
+			reindexed[i] = db
+		}
+		for oldIdx, schema := range schemas {
+			if oldIdx < index {
+				newSchemas[oldIdx] = schema
+			} else if oldIdx > index {
+				newSchemas[oldIdx-1] = schema
+			}
+		}
+		databases = reindexed
+		schemas = newSchemas
+		return nil
+	}
+
+	return NewServer(fstest.MapFS{}, databases, schemas, replication, replReport, reloadFunc, addDBFunc, deleteDBFunc)
 }
 
 func TestHandleDatabases(t *testing.T) {
@@ -159,6 +201,72 @@ func TestHandleSchemaNotFound(t *testing.T) {
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d", rec.Code)
+	}
+}
+
+func TestHandleAddDatabase(t *testing.T) {
+	srv := testServer()
+
+	body := `{"name":"New DB","driver":"sqlite","path":"/tmp/new.db"}`
+	req := httptest.NewRequest("POST", "/api/databases", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var result map[string]interface{}
+	if err := json.NewDecoder(rec.Body).Decode(&result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if result["status"] != "ok" {
+		t.Fatalf("expected status ok, got %v", result["status"])
+	}
+
+	req = httptest.NewRequest("GET", "/api/databases", nil)
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+
+	var dbs []DatabaseInfo
+	if err := json.NewDecoder(rec.Body).Decode(&dbs); err != nil {
+		t.Fatalf("decode dbs: %v", err)
+	}
+	if len(dbs) != 3 {
+		t.Fatalf("expected 3 databases after add, got %d", len(dbs))
+	}
+	if dbs[2].Name != "New DB" {
+		t.Fatalf("expected added db name, got %q", dbs[2].Name)
+	}
+}
+
+func TestHandleDeleteDatabase(t *testing.T) {
+	srv := testServer()
+
+	req := httptest.NewRequest("DELETE", "/api/databases/0", nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest("GET", "/api/databases", nil)
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+
+	var dbs []DatabaseInfo
+	if err := json.NewDecoder(rec.Body).Decode(&dbs); err != nil {
+		t.Fatalf("decode dbs: %v", err)
+	}
+	if len(dbs) != 1 {
+		t.Fatalf("expected 1 database after delete, got %d", len(dbs))
+	}
+	if dbs[0].Name != "Broken DB" {
+		t.Fatalf("expected remaining db to be Broken DB, got %q", dbs[0].Name)
+	}
+	if dbs[0].ID != 0 {
+		t.Fatalf("expected remaining db to be reindexed to 0, got %d", dbs[0].ID)
 	}
 }
 

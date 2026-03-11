@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"sync"
 
+	"github.com/robotelu/db_barrel_2.0/internal/config"
 	"github.com/robotelu/db_barrel_2.0/internal/driver"
 )
 
@@ -87,28 +88,38 @@ type ErrorResponse struct {
 // ReloadFunc is called by the reload endpoint to re-introspect all databases.
 type ReloadFunc func() ([]DatabaseInfo, map[int]*driver.MultiSchema, []ReplicationInfo, ReplicationReport)
 
+// AddDatabaseFunc persists a new database config entry.
+type AddDatabaseFunc func(config.DatabaseConfig) error
+
+// DeleteDatabaseFunc removes a database config entry by its current index.
+type DeleteDatabaseFunc func(int) error
+
 // Server holds the HTTP handler configuration.
 type Server struct {
-	mu          sync.RWMutex
-	mux         *http.ServeMux
-	webFS       fs.FS
-	databases   []DatabaseInfo
-	schemas     map[int]*driver.MultiSchema
-	replication []ReplicationInfo
-	replReport  ReplicationReport
-	reloadFunc  ReloadFunc
+	mu           sync.RWMutex
+	mux          *http.ServeMux
+	webFS        fs.FS
+	databases    []DatabaseInfo
+	schemas      map[int]*driver.MultiSchema
+	replication  []ReplicationInfo
+	replReport   ReplicationReport
+	reloadFunc   ReloadFunc
+	addDBFunc    AddDatabaseFunc
+	deleteDBFunc DeleteDatabaseFunc
 }
 
 // NewServer creates a new API server with pre-introspected database schemas.
-func NewServer(webFS fs.FS, databases []DatabaseInfo, schemas map[int]*driver.MultiSchema, replication []ReplicationInfo, replReport ReplicationReport, reload ReloadFunc) *Server {
+func NewServer(webFS fs.FS, databases []DatabaseInfo, schemas map[int]*driver.MultiSchema, replication []ReplicationInfo, replReport ReplicationReport, reload ReloadFunc, addDB AddDatabaseFunc, deleteDB DeleteDatabaseFunc) *Server {
 	s := &Server{
-		mux:         http.NewServeMux(),
-		webFS:       webFS,
-		databases:   databases,
-		schemas:     schemas,
-		replication: replication,
-		replReport:  replReport,
-		reloadFunc:  reload,
+		mux:          http.NewServeMux(),
+		webFS:        webFS,
+		databases:    databases,
+		schemas:      schemas,
+		replication:  replication,
+		replReport:   replReport,
+		reloadFunc:   reload,
+		addDBFunc:    addDB,
+		deleteDBFunc: deleteDB,
 	}
 	s.routes()
 	return s
@@ -125,6 +136,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/databases", s.handleDatabases)
+	s.mux.HandleFunc("POST /api/databases", s.handleAddDatabase)
+	s.mux.HandleFunc("DELETE /api/databases/{id}", s.handleDeleteDatabase)
 	s.mux.HandleFunc("GET /api/databases/{id}/schema", s.handleSchema)
 	s.mux.HandleFunc("GET /api/topology", s.handleTopology)
 	s.mux.HandleFunc("GET /api/topology/report", s.handleTopologyReport)
@@ -139,6 +152,79 @@ func (s *Server) handleDatabases(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	writeJSON(w, http.StatusOK, s.databases)
+}
+
+func (s *Server) handleAddDatabase(w http.ResponseWriter, r *http.Request) {
+	if s.addDBFunc == nil {
+		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "database creation not configured"})
+		return
+	}
+
+	var dbCfg config.DatabaseConfig
+	if err := json.NewDecoder(r.Body).Decode(&dbCfg); err != nil {
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "invalid JSON body"})
+		return
+	}
+
+	if err := s.addDBFunc(dbCfg); err != nil {
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: err.Error()})
+		return
+	}
+
+	if s.reloadFunc == nil {
+		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "reload not configured"})
+		return
+	}
+
+	dbs, schemas, repl, replReport := s.reloadFunc()
+	s.mu.Lock()
+	s.databases = dbs
+	s.schemas = schemas
+	s.replication = repl
+	s.replReport = replReport
+	s.mu.Unlock()
+
+	writeJSON(w, http.StatusCreated, map[string]interface{}{
+		"status":    "ok",
+		"databases": len(dbs),
+	})
+}
+
+func (s *Server) handleDeleteDatabase(w http.ResponseWriter, r *http.Request) {
+	if s.deleteDBFunc == nil {
+		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "database deletion not configured"})
+		return
+	}
+
+	idStr := r.PathValue("id")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "invalid database id"})
+		return
+	}
+
+	if err := s.deleteDBFunc(id); err != nil {
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: err.Error()})
+		return
+	}
+
+	if s.reloadFunc == nil {
+		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "reload not configured"})
+		return
+	}
+
+	dbs, schemas, repl, replReport := s.reloadFunc()
+	s.mu.Lock()
+	s.databases = dbs
+	s.schemas = schemas
+	s.replication = repl
+	s.replReport = replReport
+	s.mu.Unlock()
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"status":    "ok",
+		"databases": len(dbs),
+	})
 }
 
 func (s *Server) handleSchema(w http.ResponseWriter, r *http.Request) {

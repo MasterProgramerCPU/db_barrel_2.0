@@ -32,6 +32,66 @@
 
     <!-- Screen 1: Database Galaxy -->
     <div id="galaxy-screen" class="screen">
+        <div id="add-db-panel" class="xp-dialog add-db-panel">
+            <div class="xp-dialog-titlebar">
+                <span class="xp-dialog-title">Add Database</span>
+                <div class="panel-title-actions">
+                    <button id="toggle-add-db" class="xp-min-btn" type="button" aria-expanded="true">_</button>
+                </div>
+            </div>
+            <div id="add-db-body" class="xp-dialog-body add-db-body">
+                <form id="add-db-form" class="add-db-form">
+                    <label class="form-row">
+                        <span>Name</span>
+                        <input type="text" id="db-name-input" name="name" required>
+                    </label>
+                    <label class="form-row">
+                        <span>Driver</span>
+                        <select id="db-driver-input" name="driver">
+                            <option value="postgresql">PostgreSQL</option>
+                            <option value="mysql">MySQL</option>
+                            <option value="mariadb">MariaDB</option>
+                            <option value="sqlite">SQLite</option>
+                        </select>
+                    </label>
+                    <label class="form-row driver-network">
+                        <span>Host</span>
+                        <input type="text" id="db-host-input" name="host">
+                    </label>
+                    <label class="form-row driver-network">
+                        <span>Port</span>
+                        <input type="number" id="db-port-input" name="port" min="0" step="1">
+                    </label>
+                    <label class="form-row driver-network">
+                        <span>Database</span>
+                        <input type="text" id="db-database-input" name="database">
+                    </label>
+                    <label class="form-row driver-network">
+                        <span>User</span>
+                        <input type="text" id="db-user-input" name="user">
+                    </label>
+                    <label class="form-row driver-network">
+                        <span>Password</span>
+                        <input type="password" id="db-password-input" name="password">
+                    </label>
+                    <label class="form-row driver-network driver-postgres">
+                        <span>SSL Mode</span>
+                        <input type="text" id="db-sslmode-input" name="sslMode" value="disable">
+                    </label>
+                    <label class="form-row driver-network">
+                        <span>Params</span>
+                        <input type="text" id="db-params-input" name="params">
+                    </label>
+                    <label class="form-row driver-sqlite" hidden>
+                        <span>Path</span>
+                        <input type="text" id="db-path-input" name="path">
+                    </label>
+                    <div class="form-actions">
+                        <button id="add-db-submit" class="xp-btn" type="submit">Save</button>
+                    </div>
+                </form>
+            </div>
+        </div>
         <svg id="galaxy-svg"></svg>
     </div>
 

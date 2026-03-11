@@ -48,42 +48,90 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 
+	if err := validate(&cfg); err != nil {
+		return nil, err
+	}
+
+	return &cfg, nil
+}
+
+// Save validates and writes a config file as indented JSON.
+func Save(path string, cfg *Config) error {
+	if err := validate(cfg); err != nil {
+		return err
+	}
+
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal config: %w", err)
+	}
+	data = append(data, '\n')
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return fmt.Errorf("write config: %w", err)
+	}
+	return nil
+}
+
+// AppendDatabase adds a database entry to the config file and persists it.
+func AppendDatabase(path string, db DatabaseConfig) error {
+	cfg, err := Load(path)
+	if err != nil {
+		return err
+	}
+	cfg.Databases = append(cfg.Databases, db)
+	return Save(path, cfg)
+}
+
+// RemoveDatabaseAt removes a database entry by index and persists the config file.
+func RemoveDatabaseAt(path string, index int) error {
+	cfg, err := Load(path)
+	if err != nil {
+		return err
+	}
+	if index < 0 || index >= len(cfg.Databases) {
+		return fmt.Errorf("config: database index %d out of range", index)
+	}
+	cfg.Databases = append(cfg.Databases[:index], cfg.Databases[index+1:]...)
+	return Save(path, cfg)
+}
+
+func validate(cfg *Config) error {
 	if len(cfg.Databases) == 0 {
-		return nil, fmt.Errorf("config: no databases defined")
+		return fmt.Errorf("config: no databases defined")
 	}
 
 	for i, db := range cfg.Databases {
 		if db.Name == "" {
-			return nil, fmt.Errorf("config: database[%d] missing name", i)
+			return fmt.Errorf("config: database[%d] missing name", i)
 		}
 		if db.Driver == "" {
-			return nil, fmt.Errorf("config: database[%d] (%s) missing driver", i, db.Name)
+			return fmt.Errorf("config: database[%d] (%s) missing driver", i, db.Name)
 		}
 		drv := strings.ToLower(db.Driver)
 		if drv == "sqlite" {
 			if db.Path == "" {
-				return nil, fmt.Errorf("config: database[%d] (%s) sqlite requires 'path'", i, db.Name)
+				return fmt.Errorf("config: database[%d] (%s) sqlite requires 'path'", i, db.Name)
 			}
 		} else {
 			if db.Host == "" {
-				return nil, fmt.Errorf("config: database[%d] (%s) missing host", i, db.Name)
+				return fmt.Errorf("config: database[%d] (%s) missing host", i, db.Name)
 			}
 			if db.Database == "" {
-				return nil, fmt.Errorf("config: database[%d] (%s) missing database", i, db.Name)
+				return fmt.Errorf("config: database[%d] (%s) missing database", i, db.Name)
 			}
 		}
 	}
 
 	for i, link := range cfg.Replication {
 		if strings.TrimSpace(link.SourceName) == "" {
-			return nil, fmt.Errorf("config: replication[%d] missing sourceName", i)
+			return fmt.Errorf("config: replication[%d] missing sourceName", i)
 		}
 		if strings.TrimSpace(link.TargetName) == "" {
-			return nil, fmt.Errorf("config: replication[%d] missing targetName", i)
+			return fmt.Errorf("config: replication[%d] missing targetName", i)
 		}
 	}
 
-	return &cfg, nil
+	return nil
 }
 
 // BuildDSN constructs a driver-specific DSN string from the config fields.
