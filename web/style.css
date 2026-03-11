@@ -169,6 +169,24 @@ body {
     cursor: progress;
 }
 
+.danger-toggle-btn {
+    min-width: 92px;
+    border-color: #7A1D1D;
+    background: linear-gradient(180deg, #FFF7F7 0%, #EAD8D8 100%);
+    color: #5C1414;
+}
+
+.danger-toggle-btn:hover {
+    background: linear-gradient(180deg, #FFFFFF 0%, #E7CACA 100%);
+}
+
+.danger-toggle-btn.is-active {
+    border-color: #8E1111;
+    background: linear-gradient(180deg, #F58B8B 0%, #C13E3E 100%);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.28);
+    color: var(--text-white);
+}
+
 /* ---- Screens ---- */
 .screen {
     position: absolute;
@@ -348,10 +366,45 @@ body {
     transition: stroke-width 0.15s;
 }
 
+.db-node-inner.is-delete-mode {
+    animation: app-wiggle 0.26s ease-in-out infinite alternate;
+    transform-origin: center;
+}
+
+.db-node:nth-child(2n) .db-node-inner.is-delete-mode {
+    animation-duration: 0.29s;
+    animation-delay: 0.03s;
+}
+
+.db-node:nth-child(3n) .db-node-inner.is-delete-mode {
+    animation-duration: 0.24s;
+    animation-delay: 0.06s;
+}
+
+@keyframes app-wiggle {
+    from { transform: rotate(-1.2deg); }
+    to { transform: rotate(1.2deg); }
+}
+
+.db-node .node-delete-btn {
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.14s ease, transform 0.14s ease;
+}
+
+.db-node .node-delete-btn.is-visible {
+    opacity: 1;
+    pointer-events: auto;
+}
+
 .db-node .node-delete {
     fill: #C94040;
     stroke: rgba(255,255,255,0.45);
     stroke-width: 1;
+}
+
+.db-node .node-delete-btn.is-visible:hover .node-delete {
+    fill: #DE4E4E;
 }
 
 .db-node .node-delete-label {
@@ -655,51 +708,128 @@ body {
     top: calc(var(--header-height) + 18px);
     left: 18px;
     right: auto;
-    width: 300px;
+    width: 356px;
     max-height: calc(100vh - var(--header-height) - 36px);
     z-index: 220;
+    border-color: #2E63B8;
+    box-shadow: 0 10px 24px rgba(18,46,92,0.28);
+}
+
+.add-db-panel .xp-dialog-titlebar {
+    background: linear-gradient(180deg, #2C8AF8 0%, #1367D6 48%, #0B51B4 100%);
 }
 
 .add-db-panel.is-collapsed .add-db-body {
     display: none;
 }
 
+.add-db-body {
+    padding: 12px;
+    background:
+        linear-gradient(180deg, rgba(255,255,255,0.92) 0%, rgba(245,243,235,0.96) 100%);
+}
+
+.add-db-intro {
+    margin-bottom: 10px;
+    padding: 9px 10px;
+    font-size: 10px;
+    line-height: 1.4;
+    color: #3F5270;
+    background: linear-gradient(180deg, #FCFBF6 0%, #F1ECDD 100%);
+    border: 1px solid #D6D0BE;
+    border-radius: 4px;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.85);
+}
+
 .add-db-form {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px 10px;
 }
 
 .form-row {
     display: flex;
     flex-direction: column;
-    gap: 3px;
+    gap: 4px;
+    min-width: 0;
+    padding: 7px 8px 8px;
     font-size: 10px;
     font-weight: bold;
-    color: var(--xp-blue-dark);
+    color: #35537B;
+    background: rgba(255,255,255,0.72);
+    border: 1px solid #D2CCBA;
+    border-radius: 4px;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.88);
+}
+
+.form-row-wide {
+    grid-column: 1 / -1;
+}
+
+.form-row span {
+    letter-spacing: 0.18px;
+}
+
+.form-row small {
+    font-size: 9px;
+    font-weight: normal;
+    color: #6B7892;
 }
 
 .form-row input,
 .form-row select {
     font-family: 'Tahoma', sans-serif;
     font-size: 11px;
-    padding: 4px 6px;
-    border: 1px solid var(--border);
-    border-radius: 2px;
-    background: #fff;
+    width: 100%;
+    padding: 6px 7px;
+    border: 1px solid #9DAFC4;
+    border-radius: 3px;
+    background: linear-gradient(180deg, #FFFFFF 0%, #F7FBFF 100%);
     color: var(--text);
+    box-shadow: inset 0 1px 1px rgba(0,0,0,0.05);
 }
 
 .form-row input:focus,
 .form-row select:focus {
     outline: 1px solid var(--xp-blue);
     border-color: var(--xp-blue);
+    box-shadow: 0 0 0 2px rgba(5,96,214,0.16);
 }
 
 .form-actions {
     display: flex;
-    justify-content: flex-end;
-    padding-top: 4px;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    grid-column: 1 / -1;
+    padding-top: 8px;
+    margin-top: 2px;
+    border-top: 1px solid rgba(172,168,153,0.65);
+}
+
+.form-actions-note {
+    font-size: 9px;
+    color: #5E6C85;
+}
+
+.form-actions .xp-btn {
+    min-width: 88px;
+}
+
+@media (max-width: 720px) {
+    .add-db-panel {
+        left: 12px;
+        width: min(calc(100vw - 24px), 356px);
+    }
+
+    .add-db-form {
+        grid-template-columns: 1fr;
+    }
+
+    .form-row-wide,
+    .form-actions {
+        grid-column: auto;
+    }
 }
 
 .detail-section {

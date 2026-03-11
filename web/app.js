@@ -16,6 +16,7 @@
     const detailContent = document.getElementById('detail-content');
     const closeDetailBtn = document.getElementById('close-detail');
     const reloadBtn = document.getElementById('reload-btn');
+    const deleteModeBtn = document.getElementById('delete-mode-btn');
     const schemaSearch = document.getElementById('schema-search');
     const searchCount = document.getElementById('search-count');
     const searchClear = document.getElementById('search-clear');
@@ -45,6 +46,7 @@
     let currentSchema = null;
     let currentDbId = null;
     let galaxySim = null;
+    let deleteMode = false;
 
     function normalizeName(v) {
         return String(v || '').trim().toLowerCase();
@@ -82,6 +84,7 @@
         galaxyScreen.hidden = false;
         galaxyScreen.classList.add('fade-in');
         currentDbLabel.hidden = true;
+        deleteModeBtn.hidden = false;
         currentSchema = null;
         currentDbId = null;
         detailOverlay.hidden = true;
@@ -98,6 +101,7 @@
         schemaScreen.classList.add('fade-in');
         currentDbLabel.textContent = name;
         currentDbLabel.hidden = false;
+        deleteModeBtn.hidden = true;
     }
 
     logoHome.addEventListener('click', async () => {
@@ -141,6 +145,15 @@
         reloadBtn.textContent = isBusy ? reloadLabelBusy : reloadLabelDefault;
     }
 
+    function setDeleteMode(isEnabled) {
+        deleteMode = Boolean(isEnabled);
+        deleteModeBtn.classList.toggle('is-active', deleteMode);
+        deleteModeBtn.setAttribute('aria-pressed', String(deleteMode));
+        deleteModeBtn.textContent = deleteMode ? 'Exit Delete' : 'Delete Mode';
+        deleteModeBtn.title = deleteMode ? 'Hide delete buttons' : 'Show delete buttons';
+        if (!galaxyScreen.hidden) renderGalaxy(databases);
+    }
+
     function updateAddDatabaseFormVisibility() {
         const driver = dbDriverInput.value;
         const isSQLite = driver === 'sqlite';
@@ -167,6 +180,9 @@
     });
 
     dbDriverInput.addEventListener('change', updateAddDatabaseFormVisibility);
+    deleteModeBtn.addEventListener('click', () => {
+        setDeleteMode(!deleteMode);
+    });
 
     addDbForm.addEventListener('submit', async ev => {
         ev.preventDefault();
@@ -247,6 +263,7 @@
 
     // ---- Galaxy: XP-style nodes, zoomable ----
     function renderGalaxy(dbs) {
+        if (galaxySim) galaxySim.stop();
         d3.select('#galaxy-svg').selectAll('*').remove();
         const el = document.getElementById('galaxy-svg');
         const W = el.clientWidth || window.innerWidth;
@@ -385,11 +402,18 @@
 
         const grp = root.append('g');
         const nodeEls = grp.selectAll('.db-node').data(nodes).enter().append('g')
-            .attr('class', d => 'db-node' + (d.status === 'error' ? ' error-node' : ''))
+            .attr('class', d => {
+                let className = 'db-node';
+                if (d.status === 'error') className += ' error-node';
+                return className;
+            })
             .attr('transform', d => `translate(${d.x},${d.y})`);
 
+        const nodeInner = nodeEls.append('g')
+            .attr('class', deleteMode ? 'db-node-inner is-delete-mode' : 'db-node-inner');
+
         // Card background
-        nodeEls.append('rect')
+        nodeInner.append('rect')
             .attr('class', 'node-border')
             .attr('x', -NODE_W / 2).attr('y', -28)
             .attr('width', NODE_W).attr('height', NODE_H)
@@ -400,7 +424,7 @@
             .attr('filter', 'url(#xp-shadow)');
 
         // Card titlebar
-        nodeEls.append('rect')
+        nodeInner.append('rect')
             .attr('x', -NODE_W / 2 + 1).attr('y', -27)
             .attr('width', NODE_W - 2).attr('height', 16)
             .attr('rx', 3)
@@ -408,30 +432,30 @@
             .attr('opacity', 0.15);
 
         // Status indicator (animated dot)
-        nodeEls.append('circle')
+        nodeInner.append('circle')
             .attr('class', d => 'status-dot ' + (d.status === 'ok' ? 'ok' : 'error'))
             .attr('cx', NODE_W / 2 - 14).attr('cy', -16)
             .attr('r', 5);
 
         // DB logo
-        nodeEls.append('image')
+        nodeInner.append('image')
             .attr('href', d => `svg/${d.driver}.svg`)
             .attr('x', -ICON_SIZE / 2).attr('y', -12)
             .attr('width', ICON_SIZE).attr('height', ICON_SIZE)
             .style('pointer-events', 'none');
 
         // Name
-        nodeEls.append('text').attr('class', 'node-label')
+        nodeInner.append('text').attr('class', 'node-label')
             .attr('y', 92).text(d => d.name);
 
         // Driver badge
-        nodeEls.append('text').attr('class', 'node-driver')
+        nodeInner.append('text').attr('class', 'node-driver')
             .attr('y', 106)
             .attr('fill', d => clr(d.driver).text)
             .text(d => d.driver);
 
         // Host info label
-        nodeEls.append('text').attr('class', 'node-host')
+        nodeInner.append('text').attr('class', 'node-host')
             .attr('y', 118)
             .text(d => {
                 if (d.driver === 'sqlite') return d.host || 'local file';
@@ -441,7 +465,7 @@
             });
 
         // Error label
-        nodeEls.filter(d => d.status === 'error').each(function (d) {
+        nodeInner.filter(d => d.status === 'error').each(function (d) {
             d3.select(this).append('text').attr('class', 'node-error').attr('y', NODE_H - 24).text('Connection Failed');
         });
 
@@ -450,11 +474,12 @@
             .on('click', (ev, d) => { ev.stopPropagation(); openDb(d); })
             .style('cursor', 'pointer');
 
-        const deleteBtns = nodeEls.append('g')
-            .attr('class', 'node-delete-btn')
+        const deleteBtns = nodeInner.append('g')
+            .attr('class', 'node-delete-btn' + (deleteMode ? ' is-visible' : ''))
             .attr('transform', `translate(${NODE_W / 2 - 18},${-18})`)
-            .style('cursor', 'pointer')
+            .style('cursor', deleteMode ? 'pointer' : 'default')
             .on('click', (ev, d) => {
+                if (!deleteMode) return;
                 ev.stopPropagation();
                 deleteDatabase(d);
             });
@@ -989,5 +1014,6 @@
     function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
     updateAddDatabaseFormVisibility();
+    setDeleteMode(false);
     boot();
 })();
