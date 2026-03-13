@@ -7,8 +7,10 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/robotelu/db_barrel_2.0/internal/api"
+	"github.com/robotelu/db_barrel_2.0/internal/catalog"
 	"github.com/robotelu/db_barrel_2.0/internal/config"
 	"github.com/robotelu/db_barrel_2.0/internal/driver"
 
@@ -21,55 +23,141 @@ var webContent embed.FS
 
 func main() {
 	port := flag.Int("port", 8080, "HTTP server port")
-	configPath := flag.String("config", "databases.json", "Path to database config JSON file")
+	configPath := flag.String("config", "databases.json", "Path to DB Barrel config JSON file")
 	flag.Parse()
 
-	// Load config
-	cfg, err := config.Load(*configPath)
+	state, err := loadRuntimeState(*configPath, "")
 	if err != nil {
-		log.Fatalf("❌ Failed to load config: %v", err)
+		log.Fatalf("❌ Failed to initialize runtime state: %v", err)
 	}
-	log.Printf("📋 Loaded %d database(s) from %s", len(cfg.Databases), *configPath)
 
-	// Introspect all databases at startup
-	databases, schemas := introspectAll(cfg)
-	replication, replReport := buildReplicationWithReport(cfg)
-
-	// Prepare web filesystem
 	webFS, err := fs.Sub(webContent, "web")
 	if err != nil {
 		log.Fatalf("failed to create sub filesystem: %v", err)
 	}
 
-	// Reload function re-reads config and re-introspects
 	cfgPath := *configPath
-	reloadFunc := func() ([]api.DatabaseInfo, map[int]*driver.MultiSchema, []api.ReplicationInfo, api.ReplicationReport) {
-		newCfg, err := config.Load(cfgPath)
-		if err != nil {
-			log.Printf("❌ Reload failed to load config: %v", err)
-			return databases, schemas, replication, replReport
-		}
-		log.Printf("📋 Reloaded %d database(s) from %s", len(newCfg.Databases), cfgPath)
-		dbs, schs := introspectAll(newCfg)
-		repl, report := buildReplicationWithReport(newCfg)
-		return dbs, schs, repl, report
+	reloadFunc := func(preferredProject string) (api.ProjectState, error) {
+		return loadRuntimeState(cfgPath, preferredProject)
 	}
-
-	addDatabaseFunc := func(dbCfg config.DatabaseConfig) error {
+	selectProjectFunc := func(projectName string) (api.ProjectState, error) {
+		return loadRuntimeState(cfgPath, projectName)
+	}
+	addDatabaseFunc := func(projectName string, dbCfg config.DatabaseConfig) error {
+		cfg, err := config.Load(cfgPath)
+		if err != nil {
+			return err
+		}
+		if cfg.ProjectCatalog != nil {
+			return catalog.AppendDatabaseToProject(*cfg.ProjectCatalog, projectName, dbCfg)
+		}
 		return config.AppendDatabase(cfgPath, dbCfg)
 	}
-
-	deleteDatabaseFunc := func(index int) error {
+	deleteDatabaseFunc := func(projectName string, index int) error {
+		cfg, err := config.Load(cfgPath)
+		if err != nil {
+			return err
+		}
+		if cfg.ProjectCatalog != nil {
+			return catalog.RemoveDatabaseFromProject(*cfg.ProjectCatalog, projectName, index)
+		}
 		return config.RemoveDatabaseAt(cfgPath, index)
 	}
 
-	srv := api.NewServer(webFS, databases, schemas, replication, replReport, reloadFunc, addDatabaseFunc, deleteDatabaseFunc)
+	srv := api.NewServer(webFS, state, reloadFunc, selectProjectFunc, addDatabaseFunc, deleteDatabaseFunc)
 
 	addr := fmt.Sprintf(":%d", *port)
 	log.Printf("🛢  DB Barrel 2.0 starting on http://localhost%s", addr)
 	if err := http.ListenAndServe(addr, srv); err != nil {
 		log.Fatalf("server error: %v", err)
 	}
+}
+
+func loadRuntimeState(configPath, preferredProject string) (api.ProjectState, error) {
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return api.ProjectState{}, fmt.Errorf("load config: %w", err)
+	}
+
+	state, err := buildProjectState(cfg, preferredProject)
+	if err != nil {
+		return api.ProjectState{}, err
+	}
+
+	if cfg.ProjectCatalog != nil {
+		log.Printf("📋 Loaded %d project(s) from metadata catalog; active project=%q", len(state.Projects), state.CurrentProject)
+	} else {
+		log.Printf("📋 Loaded legacy config with %d database(s)", len(cfg.Databases))
+	}
+
+	return state, nil
+}
+
+func buildProjectState(cfg *config.Config, preferredProject string) (api.ProjectState, error) {
+	if cfg.ProjectCatalog == nil {
+		databases, schemas := introspectAll(cfg)
+		replication, replReport := buildReplicationWithReport(cfg)
+		return api.ProjectState{
+			Projects: []api.ProjectInfo{
+				{Name: "Default Project", DatabaseCount: len(cfg.Databases)},
+			},
+			CurrentProject: "Default Project",
+			Databases:      databases,
+			Schemas:        schemas,
+			Replication:    replication,
+			ReplReport:     replReport,
+		}, nil
+	}
+
+	projects, err := catalog.LoadProjects(*cfg.ProjectCatalog)
+	if err != nil {
+		return api.ProjectState{}, err
+	}
+
+	projectInfos := make([]api.ProjectInfo, 0, len(projects))
+	for _, project := range projects {
+		projectInfos = append(projectInfos, api.ProjectInfo{
+			Name:          project.Name,
+			DatabaseCount: len(project.Config.Databases),
+		})
+	}
+
+	activeProject, activeCfg, err := pickProject(projects, preferredProject, cfg.ProjectCatalog.DefaultProject)
+	if err != nil {
+		return api.ProjectState{}, err
+	}
+
+	databases, schemas := introspectAll(activeCfg)
+	replication, replReport := buildReplicationWithReport(activeCfg)
+
+	return api.ProjectState{
+		Projects:       projectInfos,
+		CurrentProject: activeProject,
+		Databases:      databases,
+		Schemas:        schemas,
+		Replication:    replication,
+		ReplReport:     replReport,
+	}, nil
+}
+
+func pickProject(projects []catalog.ProjectDefinition, preferredProject, defaultProject string) (string, *config.Config, error) {
+	for _, candidate := range []string{preferredProject, defaultProject} {
+		name := strings.TrimSpace(candidate)
+		if name == "" {
+			continue
+		}
+		for _, project := range projects {
+			if strings.EqualFold(project.Name, name) {
+				return project.Name, project.Config, nil
+			}
+		}
+	}
+
+	if len(projects) == 0 {
+		return "", nil, fmt.Errorf("no projects available")
+	}
+
+	return projects[0].Name, projects[0].Config, nil
 }
 
 func introspectAll(cfg *config.Config) ([]api.DatabaseInfo, map[int]*driver.MultiSchema) {

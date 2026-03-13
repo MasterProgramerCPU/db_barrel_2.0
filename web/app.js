@@ -10,6 +10,7 @@
     const schemaScreen = document.getElementById('schema-screen');
     const logoHome = document.getElementById('logo-home');
     const currentDbLabel = document.getElementById('current-db-name');
+    const projectSelect = document.getElementById('project-select');
     const dbCountBadge = document.getElementById('db-count-badge');
     const detailOverlay = document.getElementById('detail-overlay');
     const detailTableName = document.getElementById('detail-table-name');
@@ -38,10 +39,12 @@
     const saveLabelDefault = 'Save';
     const saveLabelBusy = 'Saving...';
 
+    let projects = [];
     let databases = [];
     let replication = [];
     let currentSchema = null;
     let currentDbId = null;
+    let currentProjectName = '';
     let galaxySim = null;
     let deleteMode = false;
 
@@ -80,7 +83,8 @@
         schemaScreen.hidden = true;
         galaxyScreen.hidden = false;
         galaxyScreen.classList.add('fade-in');
-        currentDbLabel.hidden = true;
+        currentDbLabel.textContent = currentProjectName || '';
+        currentDbLabel.hidden = !currentProjectName;
         deleteModeBtn.hidden = false;
         currentSchema = null;
         currentDbId = null;
@@ -96,7 +100,7 @@
         if (galaxySim) galaxySim.stop();
         schemaScreen.hidden = false;
         schemaScreen.classList.add('fade-in');
-        currentDbLabel.textContent = name;
+        currentDbLabel.textContent = currentProjectName ? `${currentProjectName} / ${name}` : name;
         currentDbLabel.hidden = false;
         deleteModeBtn.hidden = true;
     }
@@ -109,12 +113,15 @@
     async function performReload(options) {
         const settings = Object.assign({ reopenCurrent: true, showToastMessage: true }, options || {});
         const previousDbId = currentDbId;
-        setReloadState(true);
+        setProjectBusy(true);
         try {
             const r = await fetch('/api/reload', { method: 'POST' });
             const d = await r.json();
             if (!r.ok) throw new Error(d.error || 'Reload failed');
-            if (settings.showToastMessage) showToast(`✅ Reloaded ${d.databases} database(s)`);
+            if (settings.showToastMessage) {
+                const label = d.project ? `project "${d.project}"` : 'active project';
+                showToast(`✅ Reloaded ${label}`);
+            }
             await boot();
             if (settings.reopenCurrent && previousDbId !== null) {
                 const db = databases.find(x => x.id === previousDbId);
@@ -127,12 +134,14 @@
             if (settings.showToastMessage) showToast('❌ Reload failed: ' + e.message);
             console.error(e);
         } finally {
-            setReloadState(false);
+            setProjectBusy(false);
         }
     }
 
-    function setReloadState(isBusy) {
+    function setProjectBusy(isBusy) {
+        projectSelect.disabled = isBusy;
         deleteModeBtn.disabled = isBusy;
+        addDbSubmitBtn.disabled = isBusy;
     }
 
     function setDeleteMode(isEnabled) {
@@ -142,6 +151,56 @@
         deleteModeBtn.title = deleteMode ? 'Hide delete buttons' : 'Show delete buttons';
         if (!galaxyScreen.hidden) renderGalaxy(databases);
     }
+
+    function populateProjects() {
+        const previousValue = projectSelect.value;
+        projectSelect.replaceChildren();
+
+        projects.forEach(project => {
+            const option = document.createElement('option');
+            option.value = project.name;
+            option.textContent = project.name;
+            projectSelect.appendChild(option);
+        });
+
+        const nextValue = projects.some(project => project.name === currentProjectName)
+            ? currentProjectName
+            : previousValue;
+        if (nextValue) projectSelect.value = nextValue;
+        if (!projectSelect.value && projects.length > 0) {
+            projectSelect.value = projects[0].name;
+        }
+    }
+
+    async function selectProject(projectName) {
+        const targetName = String(projectName || '').trim();
+        if (!targetName || targetName === currentProjectName) return;
+
+        setProjectBusy(true);
+        try {
+            const r = await fetch('/api/projects/select', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: targetName }),
+            });
+            const d = await r.json();
+            if (!r.ok) throw new Error(d.error || 'Project switch failed');
+            currentProjectName = d.project || targetName;
+            setDeleteMode(false);
+            showToast(`✅ Loaded project "${currentProjectName}"`);
+            await boot();
+            showGallery();
+        } catch (e) {
+            showToast('❌ Project switch failed: ' + e.message);
+            console.error(e);
+        } finally {
+            setProjectBusy(false);
+        }
+    }
+
+    projectSelect.addEventListener('change', () => {
+        selectProject(projectSelect.value);
+    });
 
     function updateAddDatabaseFormVisibility() {
         const driver = dbDriverInput.value;
@@ -175,7 +234,7 @@
 
     addDbForm.addEventListener('submit', async ev => {
         ev.preventDefault();
-        addDbSubmitBtn.disabled = true;
+        setProjectBusy(true);
         addDbSubmitBtn.textContent = saveLabelBusy;
         try {
             const payload = {
@@ -207,45 +266,62 @@
             dbDriverInput.value = 'postgresql';
             dbSSLModeInput.value = 'disable';
             updateAddDatabaseFormVisibility();
-            showToast(`✅ Added database. Reloaded ${d.databases} connection(s)`);
+            showToast(`✅ Added database to project "${d.project || currentProjectName}"`);
             await boot();
             showGallery();
         } catch (e) {
             showToast('❌ Save failed: ' + e.message);
             console.error(e);
         } finally {
-            addDbSubmitBtn.disabled = false;
+            setProjectBusy(false);
             addDbSubmitBtn.textContent = saveLabelDefault;
         }
     });
 
     async function deleteDatabase(db) {
-        if (!window.confirm(`Delete database "${db.name}" from the config file?`)) return;
+        if (!window.confirm(`Delete database "${db.name}" from project "${currentProjectName}"?`)) return;
+        setProjectBusy(true);
         try {
             const r = await fetch(`/api/databases/${db.id}`, { method: 'DELETE' });
             const d = await r.json();
             if (!r.ok) throw new Error(d.error || 'Delete failed');
-            showToast(`✅ Deleted database. ${d.databases} connection(s) remain`);
+            showToast(`✅ Deleted database from project "${d.project || currentProjectName}"`);
             await boot();
             showGallery();
         } catch (e) {
             showToast('❌ Delete failed: ' + e.message);
             console.error(e);
+        } finally {
+            setProjectBusy(false);
         }
     }
 
     // ---- Load ----
     async function boot() {
         try {
-            const [dbRes, topoRes] = await Promise.all([
+            const [projectRes, dbRes, topoRes] = await Promise.all([
+                fetch('/api/projects'),
                 fetch('/api/databases'),
                 fetch('/api/topology'),
             ]);
+            const projectData = await projectRes.json();
             const dbData = await dbRes.json();
             const topoData = await topoRes.json();
+            projects = Array.isArray(projectData.projects) ? projectData.projects : [];
+            currentProjectName = projectData.currentProject || '';
+            populateProjects();
             databases = Array.isArray(dbData) ? dbData : [];
             replication = Array.isArray(topoData) ? topoData : [];
             dbCountBadge.textContent = databases.length + ' database' + (databases.length !== 1 ? 's' : '');
+            if (!schemaScreen.hidden && currentDbId !== null) {
+                const activeDb = databases.find(db => db.id === currentDbId);
+                currentDbLabel.textContent = activeDb
+                    ? `${currentProjectName} / ${activeDb.name}`
+                    : (currentProjectName || '');
+            } else {
+                currentDbLabel.textContent = currentProjectName || '';
+                currentDbLabel.hidden = !currentProjectName;
+            }
             renderGalaxy(databases);
         } catch (e) { console.error(e); }
     }

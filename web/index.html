@@ -25,6 +25,10 @@
             <span id="current-db-name" class="current-db-label" hidden></span>
         </div>
         <div class="header-right">
+            <label class="project-picker" for="project-select">
+                <span class="project-picker-label">Project</span>
+                <select id="project-select" class="project-select"></select>
+            </label>
             <span id="db-count-badge" class="count-badge"></span>
             <button id="delete-mode-btn" class="xp-btn danger-toggle-btn" title="Toggle delete mode" aria-pressed="false">
                 <span class="toggle-check" aria-hidden="true"></span>
@@ -37,13 +41,13 @@
     <div id="galaxy-screen" class="screen">
         <div id="add-db-panel" class="xp-dialog add-db-panel">
             <div class="xp-dialog-titlebar">
-                <span class="xp-dialog-title">Add Database</span>
+                <span class="xp-dialog-title">Add Database To Project</span>
                 <div class="panel-title-actions">
                     <button id="toggle-add-db" class="xp-min-btn" type="button" aria-expanded="true">_</button>
                 </div>
             </div>
             <div id="add-db-body" class="xp-dialog-body add-db-body">
-                <p class="add-db-intro">Create a new connection directly from the dashboard. The entry is saved into the JSON config and reloaded immediately.</p>
+                <p class="add-db-intro">Add a database connection to the currently selected project. DB Barrel updates that project's <code>barrel_configs</code> JSON and reloads it immediately.</p>
                 <form id="add-db-form" class="add-db-form">
                     <label class="form-row form-row-wide">
                         <span>Name</span>
@@ -101,7 +105,7 @@
                         <input type="text" id="db-path-input" name="path">
                     </label>
                     <div class="form-actions">
-                        <span class="form-actions-note">Saved entries are reloaded automatically.</span>
+                        <span class="form-actions-note">Changes are stored in the selected project's JSON config.</span>
                         <button id="add-db-submit" class="xp-btn" type="submit">Save</button>
                     </div>
                 </form>

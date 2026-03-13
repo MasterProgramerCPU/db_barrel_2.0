@@ -87,6 +87,37 @@ body {
     gap: 10px;
 }
 
+.project-picker {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: rgba(255,255,255,0.92);
+    font-size: 11px;
+    font-weight: bold;
+}
+
+.project-picker-label {
+    text-shadow: 1px 1px 1px rgba(0,0,0,0.25);
+}
+
+.project-select {
+    min-width: 180px;
+    max-width: 280px;
+    height: 26px;
+    padding: 2px 8px;
+    border: 1px solid #003399;
+    border-radius: 3px;
+    background: linear-gradient(180deg, #fff 0%, #E0E0D4 100%);
+    color: var(--text);
+    font-family: 'Tahoma', sans-serif;
+    font-size: 11px;
+}
+
+.project-select:disabled {
+    opacity: 0.75;
+    cursor: progress;
+}
+
 .logo-area {
     display: flex;
     align-items: center;

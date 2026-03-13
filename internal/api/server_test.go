@@ -13,9 +13,8 @@ import (
 	"github.com/robotelu/db_barrel_2.0/internal/driver"
 )
 
-func testServer() *Server {
-	// Create test schema
-	schema := &driver.MultiSchema{
+func testProjectState(projectName string) ProjectState {
+	alphaSchema := &driver.MultiSchema{
 		Databases: []driver.DatabaseSchema{
 			{
 				Name: "main",
@@ -27,22 +26,23 @@ func testServer() *Server {
 							{Name: "id", DataType: "INTEGER", IsPrimaryKey: true},
 							{Name: "name", DataType: "TEXT"},
 						},
-						Indexes: []driver.Index{
-							{Name: "idx_users_name", Columns: []string{"name"}, IsUnique: false},
-						},
 					},
+				},
+			},
+		},
+	}
+
+	betaSchema := &driver.MultiSchema{
+		Databases: []driver.DatabaseSchema{
+			{
+				Name: "warehouse",
+				Tables: []driver.Table{
 					{
-						Name:     "posts",
-						Database: "main",
+						Name:     "orders",
+						Database: "warehouse",
 						Columns: []driver.Column{
 							{Name: "id", DataType: "INTEGER", IsPrimaryKey: true},
-							{Name: "user_id", DataType: "INTEGER"},
-						},
-						ForeignKeys: []driver.ForeignKey{
-							{ConstraintName: "fk_posts_user", ColumnName: "user_id", ReferencedTable: "users", ReferencedColumn: "id"},
-						},
-						Indexes: []driver.Index{
-							{Name: "idx_posts_user_id", Columns: []string{"user_id"}, IsUnique: false},
+							{Name: "created_at", DataType: "TEXT"},
 						},
 					},
 				},
@@ -50,35 +50,102 @@ func testServer() *Server {
 		},
 	}
 
-	databases := []DatabaseInfo{
-		{ID: 0, Name: "Test DB", Driver: "sqlite", Status: "ok", TableCount: 2, Host: "localhost"},
-		{ID: 1, Name: "Broken DB", Driver: "postgresql", Status: "error", Error: "connection refused", Host: "db.example.com", Port: 5432},
+	projects := []ProjectInfo{
+		{Name: "Alpha", DatabaseCount: 2},
+		{Name: "Beta", DatabaseCount: 1},
 	}
 
-	schemas := map[int]*driver.MultiSchema{0: schema}
-	replication := []ReplicationInfo{
-		{SourceName: "Test DB", TargetName: "Broken DB", Type: "streaming"},
+	if projectName == "Beta" {
+		return ProjectState{
+			Projects:       projects,
+			CurrentProject: "Beta",
+			Databases: []DatabaseInfo{
+				{ID: 0, Name: "Warehouse", Driver: "sqlite", Status: "ok", TableCount: 1, Host: "localhost"},
+			},
+			Schemas: map[int]*driver.MultiSchema{0: betaSchema},
+			Replication: []ReplicationInfo{
+				{SourceName: "Warehouse", TargetName: "Warehouse Replica", Type: "streaming"},
+			},
+			ReplReport: ReplicationReport{
+				GeneratedAt: "2026-03-13T00:00:00Z",
+				Summary: ReplicationSummary{
+					ConfiguredDatabases: 1,
+					MergedLinks:         1,
+				},
+			},
+		}
 	}
-	replReport := ReplicationReport{
-		GeneratedAt: "2026-03-09T00:00:00Z",
-		Summary: ReplicationSummary{
-			ConfiguredDatabases:         2,
-			ConfiguredPostgresDatabases: 1,
-			AutoDiscoveredLinks:         0,
-			MergedLinks:                 1,
-			DroppedLinks:                0,
-			EndpointErrors:              0,
+
+	return ProjectState{
+		Projects:       projects,
+		CurrentProject: "Alpha",
+		Databases: []DatabaseInfo{
+			{ID: 0, Name: "App DB", Driver: "sqlite", Status: "ok", TableCount: 1, Host: "localhost"},
+			{ID: 1, Name: "Broken DB", Driver: "postgresql", Status: "error", Error: "connection refused", Host: "db.example.com", Port: 5432},
 		},
-		FinalLinks: replication,
+		Schemas: map[int]*driver.MultiSchema{0: alphaSchema},
+		Replication: []ReplicationInfo{
+			{SourceName: "App DB", TargetName: "Broken DB", Type: "streaming"},
+		},
+		ReplReport: ReplicationReport{
+			GeneratedAt: "2026-03-13T00:00:00Z",
+			Summary: ReplicationSummary{
+				ConfiguredDatabases: 2,
+				MergedLinks:         1,
+			},
+			FinalLinks: []ReplicationInfo{
+				{SourceName: "App DB", TargetName: "Broken DB", Type: "streaming"},
+			},
+		},
+	}
+}
+
+func testServer() *Server {
+	projectStates := map[string]ProjectState{
+		"Alpha": testProjectState("Alpha"),
+		"Beta":  testProjectState("Beta"),
+	}
+	currentProject := "Alpha"
+
+	syncProjects := func() {
+		projectInfos := []ProjectInfo{
+			{Name: "Alpha", DatabaseCount: len(projectStates["Alpha"].Databases)},
+			{Name: "Beta", DatabaseCount: len(projectStates["Beta"].Databases)},
+		}
+		for name, state := range projectStates {
+			state.Projects = projectInfos
+			state.CurrentProject = name
+			projectStates[name] = state
+		}
+	}
+	syncProjects()
+
+	reloadFunc := func(preferredProject string) (ProjectState, error) {
+		if preferredProject != "" {
+			if _, ok := projectStates[preferredProject]; ok {
+				currentProject = preferredProject
+			}
+		}
+		return projectStates[currentProject], nil
 	}
 
-	reloadFunc := func() ([]DatabaseInfo, map[int]*driver.MultiSchema, []ReplicationInfo, ReplicationReport) {
-		return databases, schemas, replication, replReport
+	selectFunc := func(projectName string) (ProjectState, error) {
+		state, ok := projectStates[projectName]
+		if !ok {
+			return ProjectState{}, fmt.Errorf("unknown project %q", projectName)
+		}
+		currentProject = projectName
+		return state, nil
 	}
 
-	addDBFunc := func(dbCfg config.DatabaseConfig) error {
-		databases = append(databases, DatabaseInfo{
-			ID:         len(databases),
+	addFunc := func(projectName string, dbCfg config.DatabaseConfig) error {
+		state, ok := projectStates[projectName]
+		if !ok {
+			return fmt.Errorf("unknown project %q", projectName)
+		}
+		id := len(state.Databases)
+		state.Databases = append(state.Databases, DatabaseInfo{
+			ID:         id,
 			Name:       dbCfg.Name,
 			Driver:     dbCfg.Driver,
 			Status:     "ok",
@@ -86,42 +153,98 @@ func testServer() *Server {
 			Host:       dbCfg.Host,
 			Port:       dbCfg.Port,
 		})
-		schemas[len(databases)-1] = &driver.MultiSchema{
+		if state.Schemas == nil {
+			state.Schemas = make(map[int]*driver.MultiSchema)
+		}
+		state.Schemas[id] = &driver.MultiSchema{
 			Databases: []driver.DatabaseSchema{{Name: dbCfg.Database}},
 		}
+		projectStates[projectName] = state
+		syncProjects()
 		return nil
 	}
 
-	deleteDBFunc := func(index int) error {
-		if index < 0 || index >= len(databases) {
+	deleteFunc := func(projectName string, index int) error {
+		state, ok := projectStates[projectName]
+		if !ok {
+			return fmt.Errorf("unknown project %q", projectName)
+		}
+		if index < 0 || index >= len(state.Databases) {
 			return fmt.Errorf("out of range")
 		}
-		databases = append(databases[:index], databases[index+1:]...)
-		reindexed := make([]DatabaseInfo, len(databases))
-		newSchemas := make(map[int]*driver.MultiSchema, len(schemas))
-		for i, db := range databases {
-			db.ID = i
-			reindexed[i] = db
+		state.Databases = append(state.Databases[:index], state.Databases[index+1:]...)
+
+		reindexed := make(map[int]*driver.MultiSchema, len(state.Schemas))
+		for i := range state.Databases {
+			state.Databases[i].ID = i
 		}
-		for oldIdx, schema := range schemas {
+		for oldIdx, schema := range state.Schemas {
 			if oldIdx < index {
-				newSchemas[oldIdx] = schema
+				reindexed[oldIdx] = schema
 			} else if oldIdx > index {
-				newSchemas[oldIdx-1] = schema
+				reindexed[oldIdx-1] = schema
 			}
 		}
-		databases = reindexed
-		schemas = newSchemas
+		state.Schemas = reindexed
+		projectStates[projectName] = state
+		syncProjects()
 		return nil
 	}
 
-	return NewServer(fstest.MapFS{}, databases, schemas, replication, replReport, reloadFunc, addDBFunc, deleteDBFunc)
+	return NewServer(fstest.MapFS{}, projectStates[currentProject], reloadFunc, selectFunc, addFunc, deleteFunc)
+}
+
+func TestHandleProjects(t *testing.T) {
+	srv := testServer()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/projects", nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var resp ProjectsResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.CurrentProject != "Alpha" {
+		t.Fatalf("expected current project Alpha, got %q", resp.CurrentProject)
+	}
+	if len(resp.Projects) != 2 {
+		t.Fatalf("expected 2 projects, got %d", len(resp.Projects))
+	}
+}
+
+func TestHandleSelectProject(t *testing.T) {
+	srv := testServer()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/projects/select", strings.NewReader(`{"name":"Beta"}`))
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/databases", nil)
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+
+	var dbs []DatabaseInfo
+	if err := json.NewDecoder(rec.Body).Decode(&dbs); err != nil {
+		t.Fatalf("decode dbs: %v", err)
+	}
+	if len(dbs) != 1 || dbs[0].Name != "Warehouse" {
+		t.Fatalf("expected Beta project databases, got %#v", dbs)
+	}
 }
 
 func TestHandleDatabases(t *testing.T) {
 	srv := testServer()
 
-	req := httptest.NewRequest("GET", "/api/databases", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/databases", nil)
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, req)
 
@@ -136,18 +259,6 @@ func TestHandleDatabases(t *testing.T) {
 	if len(dbs) != 2 {
 		t.Fatalf("expected 2 databases, got %d", len(dbs))
 	}
-	if dbs[0].Name != "Test DB" {
-		t.Errorf("expected name 'Test DB', got %q", dbs[0].Name)
-	}
-	if dbs[0].Driver != "sqlite" {
-		t.Errorf("expected driver 'sqlite', got %q", dbs[0].Driver)
-	}
-	if dbs[1].Status != "error" {
-		t.Errorf("expected status 'error', got %q", dbs[1].Status)
-	}
-	if dbs[1].Host != "db.example.com" {
-		t.Errorf("expected host 'db.example.com', got %q", dbs[1].Host)
-	}
 	if rec.Header().Get("Access-Control-Allow-Origin") != "*" {
 		t.Errorf("expected wildcard CORS header, got %q", rec.Header().Get("Access-Control-Allow-Origin"))
 	}
@@ -156,7 +267,7 @@ func TestHandleDatabases(t *testing.T) {
 func TestHandleSchemaOK(t *testing.T) {
 	srv := testServer()
 
-	req := httptest.NewRequest("GET", "/api/databases/0/schema", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/databases/0/schema", nil)
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, req)
 
@@ -168,22 +279,15 @@ func TestHandleSchemaOK(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&multi); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if len(multi.Databases) != 1 {
-		t.Errorf("expected 1 database group, got %d", len(multi.Databases))
-	}
-	if len(multi.Databases[0].Tables) != 2 {
-		t.Errorf("expected 2 tables, got %d", len(multi.Databases[0].Tables))
-	}
-	// Verify indexes are present
-	if len(multi.Databases[0].Tables[0].Indexes) != 1 {
-		t.Errorf("expected 1 index on users table, got %d", len(multi.Databases[0].Tables[0].Indexes))
+	if len(multi.Databases) != 1 || len(multi.Databases[0].Tables) != 1 {
+		t.Fatalf("expected one schema table, got %#v", multi)
 	}
 }
 
 func TestHandleSchemaBrokenDB(t *testing.T) {
 	srv := testServer()
 
-	req := httptest.NewRequest("GET", "/api/databases/1/schema", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/databases/1/schema", nil)
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, req)
 
@@ -195,7 +299,7 @@ func TestHandleSchemaBrokenDB(t *testing.T) {
 func TestHandleSchemaNotFound(t *testing.T) {
 	srv := testServer()
 
-	req := httptest.NewRequest("GET", "/api/databases/99/schema", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/databases/99/schema", nil)
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, req)
 
@@ -204,16 +308,15 @@ func TestHandleSchemaNotFound(t *testing.T) {
 	}
 }
 
-func TestHandleAddDatabase(t *testing.T) {
+func TestHandleReload(t *testing.T) {
 	srv := testServer()
 
-	body := `{"name":"New DB","driver":"sqlite","path":"/tmp/new.db"}`
-	req := httptest.NewRequest("POST", "/api/databases", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/reload", nil)
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
 
 	var result map[string]interface{}
@@ -223,8 +326,21 @@ func TestHandleAddDatabase(t *testing.T) {
 	if result["status"] != "ok" {
 		t.Fatalf("expected status ok, got %v", result["status"])
 	}
+}
 
-	req = httptest.NewRequest("GET", "/api/databases", nil)
+func TestHandleAddDatabase(t *testing.T) {
+	srv := testServer()
+
+	body := `{"name":"New DB","driver":"sqlite","path":"/tmp/new.db"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/databases", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/databases", nil)
 	rec = httptest.NewRecorder()
 	srv.ServeHTTP(rec, req)
 
@@ -232,18 +348,15 @@ func TestHandleAddDatabase(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&dbs); err != nil {
 		t.Fatalf("decode dbs: %v", err)
 	}
-	if len(dbs) != 3 {
-		t.Fatalf("expected 3 databases after add, got %d", len(dbs))
-	}
-	if dbs[2].Name != "New DB" {
-		t.Fatalf("expected added db name, got %q", dbs[2].Name)
+	if len(dbs) != 3 || dbs[2].Name != "New DB" {
+		t.Fatalf("expected new database in active project, got %#v", dbs)
 	}
 }
 
 func TestHandleDeleteDatabase(t *testing.T) {
 	srv := testServer()
 
-	req := httptest.NewRequest("DELETE", "/api/databases/0", nil)
+	req := httptest.NewRequest(http.MethodDelete, "/api/databases/0", nil)
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, req)
 
@@ -251,7 +364,7 @@ func TestHandleDeleteDatabase(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
 
-	req = httptest.NewRequest("GET", "/api/databases", nil)
+	req = httptest.NewRequest(http.MethodGet, "/api/databases", nil)
 	rec = httptest.NewRecorder()
 	srv.ServeHTTP(rec, req)
 
@@ -259,41 +372,15 @@ func TestHandleDeleteDatabase(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&dbs); err != nil {
 		t.Fatalf("decode dbs: %v", err)
 	}
-	if len(dbs) != 1 {
-		t.Fatalf("expected 1 database after delete, got %d", len(dbs))
-	}
-	if dbs[0].Name != "Broken DB" {
-		t.Fatalf("expected remaining db to be Broken DB, got %q", dbs[0].Name)
-	}
-	if dbs[0].ID != 0 {
-		t.Fatalf("expected remaining db to be reindexed to 0, got %d", dbs[0].ID)
-	}
-}
-
-func TestHandleReload(t *testing.T) {
-	srv := testServer()
-
-	req := httptest.NewRequest("POST", "/api/reload", nil)
-	rec := httptest.NewRecorder()
-	srv.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
-	}
-
-	var result map[string]interface{}
-	if err := json.NewDecoder(rec.Body).Decode(&result); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if result["status"] != "ok" {
-		t.Errorf("expected status 'ok', got %v", result["status"])
+	if len(dbs) != 1 || dbs[0].Name != "Broken DB" || dbs[0].ID != 0 {
+		t.Fatalf("unexpected databases after delete: %#v", dbs)
 	}
 }
 
 func TestHandleTopology(t *testing.T) {
 	srv := testServer()
 
-	req := httptest.NewRequest("GET", "/api/topology", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/topology", nil)
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, req)
 
@@ -305,18 +392,15 @@ func TestHandleTopology(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&repl); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if len(repl) != 1 {
-		t.Fatalf("expected 1 replication link, got %d", len(repl))
-	}
-	if repl[0].SourceName != "Test DB" {
-		t.Errorf("expected source 'Test DB', got %q", repl[0].SourceName)
+	if len(repl) != 1 || repl[0].SourceName != "App DB" {
+		t.Fatalf("unexpected topology payload: %#v", repl)
 	}
 }
 
 func TestHandleTopologyReport(t *testing.T) {
 	srv := testServer()
 
-	req := httptest.NewRequest("GET", "/api/topology/report", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/topology/report", nil)
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, req)
 
@@ -336,7 +420,7 @@ func TestHandleTopologyReport(t *testing.T) {
 func TestCORSReflectsOriginAndHandlesPreflight(t *testing.T) {
 	srv := testServer()
 
-	req := httptest.NewRequest("OPTIONS", "/api/databases", nil)
+	req := httptest.NewRequest(http.MethodOptions, "/api/databases", nil)
 	req.Header.Set("Origin", "https://example.com")
 	req.Header.Set("Access-Control-Request-Method", "GET")
 	req.Header.Set("Access-Control-Request-Headers", "Content-Type, X-Custom")

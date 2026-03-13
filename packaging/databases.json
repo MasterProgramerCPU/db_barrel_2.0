@@ -1,19 +1,16 @@
 {
-    "databases": [
-        {
-            "name": "Example PostgreSQL",
-            "driver": "postgresql",
-            "host": "localhost",
-            "port": 5432,
-            "user": "postgres",
-            "password": "changeme",
-            "database": "mydb",
-            "sslMode": "disable"
-        },
-        {
-            "name": "Example SQLite",
-            "driver": "sqlite",
-            "path": "/var/lib/db-barrel/example.db"
-        }
-    ]
+  "projectCatalog": {
+    "connection": {
+      "driver": "postgresql",
+      "host": "localhost",
+      "port": 5432,
+      "user": "postgres",
+      "password": "changeme",
+      "database": "platform",
+      "sslMode": "disable"
+    },
+    "projectsTable": "projects",
+    "projectNameColumn": "name",
+    "barrelConfigsColumn": "barrel_configs"
+  }
 }

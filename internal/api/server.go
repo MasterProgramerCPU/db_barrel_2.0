@@ -25,6 +25,23 @@ type DatabaseInfo struct {
 	Port       int    `json:"port,omitempty"`
 }
 
+// ProjectInfo is the public metadata for a project.
+type ProjectInfo struct {
+	Name          string `json:"name"`
+	DatabaseCount int    `json:"databaseCount"`
+}
+
+// ProjectsResponse contains the available project names and the active project.
+type ProjectsResponse struct {
+	CurrentProject string        `json:"currentProject"`
+	Projects       []ProjectInfo `json:"projects"`
+}
+
+// ProjectSelectionRequest selects a project by name.
+type ProjectSelectionRequest struct {
+	Name string `json:"name"`
+}
+
 // ReplicationInfo is the public metadata for a replication link.
 type ReplicationInfo struct {
 	SourceName string `json:"sourceName"`
@@ -85,42 +102,56 @@ type ErrorResponse struct {
 	Error string `json:"error"`
 }
 
-// ReloadFunc is called by the reload endpoint to re-introspect all databases.
-type ReloadFunc func() ([]DatabaseInfo, map[int]*driver.MultiSchema, []ReplicationInfo, ReplicationReport)
+// ProjectState is the active in-memory view served to the UI.
+type ProjectState struct {
+	Projects       []ProjectInfo
+	CurrentProject string
+	Databases      []DatabaseInfo
+	Schemas        map[int]*driver.MultiSchema
+	Replication    []ReplicationInfo
+	ReplReport     ReplicationReport
+}
 
-// AddDatabaseFunc persists a new database config entry.
-type AddDatabaseFunc func(config.DatabaseConfig) error
+// ReloadFunc refreshes the project catalog and active project.
+type ReloadFunc func(preferredProject string) (ProjectState, error)
 
-// DeleteDatabaseFunc removes a database config entry by its current index.
-type DeleteDatabaseFunc func(int) error
+// SelectProjectFunc switches the active project.
+type SelectProjectFunc func(string) (ProjectState, error)
+
+// AddDatabaseFunc appends a database entry to the current project's config.
+type AddDatabaseFunc func(projectName string, dbCfg config.DatabaseConfig) error
+
+// DeleteDatabaseFunc removes a database entry from the current project's config.
+type DeleteDatabaseFunc func(projectName string, index int) error
 
 // Server holds the HTTP handler configuration.
 type Server struct {
-	mu           sync.RWMutex
-	mux          *http.ServeMux
-	webFS        fs.FS
-	databases    []DatabaseInfo
-	schemas      map[int]*driver.MultiSchema
-	replication  []ReplicationInfo
-	replReport   ReplicationReport
-	reloadFunc   ReloadFunc
-	addDBFunc    AddDatabaseFunc
-	deleteDBFunc DeleteDatabaseFunc
+	mu                sync.RWMutex
+	mux               *http.ServeMux
+	webFS             fs.FS
+	projects          []ProjectInfo
+	currentProject    string
+	databases         []DatabaseInfo
+	schemas           map[int]*driver.MultiSchema
+	replication       []ReplicationInfo
+	replReport        ReplicationReport
+	reloadFunc        ReloadFunc
+	selectProjectFunc SelectProjectFunc
+	addDBFunc         AddDatabaseFunc
+	deleteDBFunc      DeleteDatabaseFunc
 }
 
-// NewServer creates a new API server with pre-introspected database schemas.
-func NewServer(webFS fs.FS, databases []DatabaseInfo, schemas map[int]*driver.MultiSchema, replication []ReplicationInfo, replReport ReplicationReport, reload ReloadFunc, addDB AddDatabaseFunc, deleteDB DeleteDatabaseFunc) *Server {
+// NewServer creates a new API server with an initial project state.
+func NewServer(webFS fs.FS, initial ProjectState, reload ReloadFunc, selectProject SelectProjectFunc, addDB AddDatabaseFunc, deleteDB DeleteDatabaseFunc) *Server {
 	s := &Server{
-		mux:          http.NewServeMux(),
-		webFS:        webFS,
-		databases:    databases,
-		schemas:      schemas,
-		replication:  replication,
-		replReport:   replReport,
-		reloadFunc:   reload,
-		addDBFunc:    addDB,
-		deleteDBFunc: deleteDB,
+		mux:               http.NewServeMux(),
+		webFS:             webFS,
+		reloadFunc:        reload,
+		selectProjectFunc: selectProject,
+		addDBFunc:         addDB,
+		deleteDBFunc:      deleteDB,
 	}
+	s.applyState(initial)
 	s.routes()
 	return s
 }
@@ -135,6 +166,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) routes() {
+	s.mux.HandleFunc("GET /api/projects", s.handleProjects)
+	s.mux.HandleFunc("POST /api/projects/select", s.handleSelectProject)
 	s.mux.HandleFunc("GET /api/databases", s.handleDatabases)
 	s.mux.HandleFunc("POST /api/databases", s.handleAddDatabase)
 	s.mux.HandleFunc("DELETE /api/databases/{id}", s.handleDeleteDatabase)
@@ -143,9 +176,62 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/topology/report", s.handleTopologyReport)
 	s.mux.HandleFunc("POST /api/reload", s.handleReload)
 
-	// Serve embedded static files
 	fileServer := http.FileServer(http.FS(s.webFS))
 	s.mux.Handle("/", fileServer)
+}
+
+func (s *Server) applyState(state ProjectState) {
+	s.projects = append([]ProjectInfo(nil), state.Projects...)
+	s.currentProject = state.CurrentProject
+	s.databases = append([]DatabaseInfo(nil), state.Databases...)
+	s.schemas = state.Schemas
+	if s.schemas == nil {
+		s.schemas = make(map[int]*driver.MultiSchema)
+	}
+	s.replication = append([]ReplicationInfo(nil), state.Replication...)
+	s.replReport = state.ReplReport
+}
+
+func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	writeJSON(w, http.StatusOK, ProjectsResponse{
+		CurrentProject: s.currentProject,
+		Projects:       s.projects,
+	})
+}
+
+func (s *Server) handleSelectProject(w http.ResponseWriter, r *http.Request) {
+	if s.selectProjectFunc == nil {
+		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "project selection not configured"})
+		return
+	}
+
+	var req ProjectSelectionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "invalid JSON body"})
+		return
+	}
+	if req.Name == "" {
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "project name is required"})
+		return
+	}
+
+	state, err := s.selectProjectFunc(req.Name)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: err.Error()})
+		return
+	}
+
+	s.mu.Lock()
+	s.applyState(state)
+	s.mu.Unlock()
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"status":        "ok",
+		"project":       s.currentProject,
+		"databaseCount": len(s.databases),
+	})
 }
 
 func (s *Server) handleDatabases(w http.ResponseWriter, r *http.Request) {
@@ -166,27 +252,26 @@ func (s *Server) handleAddDatabase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.addDBFunc(dbCfg); err != nil {
+	s.mu.RLock()
+	projectName := s.currentProject
+	s.mu.RUnlock()
+
+	if err := s.addDBFunc(projectName, dbCfg); err != nil {
 		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: err.Error()})
 		return
 	}
 
-	if s.reloadFunc == nil {
-		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "reload not configured"})
+	if err := s.reloadIntoCurrentProject(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: err.Error()})
 		return
 	}
 
-	dbs, schemas, repl, replReport := s.reloadFunc()
-	s.mu.Lock()
-	s.databases = dbs
-	s.schemas = schemas
-	s.replication = repl
-	s.replReport = replReport
-	s.mu.Unlock()
-
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	writeJSON(w, http.StatusCreated, map[string]interface{}{
-		"status":    "ok",
-		"databases": len(dbs),
+		"status":        "ok",
+		"project":       s.currentProject,
+		"databaseCount": len(s.databases),
 	})
 }
 
@@ -203,27 +288,26 @@ func (s *Server) handleDeleteDatabase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.deleteDBFunc(id); err != nil {
+	s.mu.RLock()
+	projectName := s.currentProject
+	s.mu.RUnlock()
+
+	if err := s.deleteDBFunc(projectName, id); err != nil {
 		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: err.Error()})
 		return
 	}
 
-	if s.reloadFunc == nil {
-		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "reload not configured"})
+	if err := s.reloadIntoCurrentProject(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: err.Error()})
 		return
 	}
 
-	dbs, schemas, repl, replReport := s.reloadFunc()
-	s.mu.Lock()
-	s.databases = dbs
-	s.schemas = schemas
-	s.replication = repl
-	s.replReport = replReport
-	s.mu.Unlock()
-
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"status":    "ok",
-		"databases": len(dbs),
+		"status":        "ok",
+		"project":       s.currentProject,
+		"databaseCount": len(s.databases),
 	})
 }
 
@@ -266,21 +350,49 @@ func (s *Server) handleReload(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "reload not configured"})
 		return
 	}
-	log.Println("🔄 Reloading databases...")
-	dbs, schemas, repl, replReport := s.reloadFunc()
+
+	s.mu.RLock()
+	preferredProject := s.currentProject
+	s.mu.RUnlock()
+
+	log.Printf("🔄 Reloading project catalog (preferred project=%q)...", preferredProject)
+	state, err := s.reloadFunc(preferredProject)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: err.Error()})
+		return
+	}
 
 	s.mu.Lock()
-	s.databases = dbs
-	s.schemas = schemas
-	s.replication = repl
-	s.replReport = replReport
+	s.applyState(state)
 	s.mu.Unlock()
 
-	log.Printf("🔄 Reload complete: %d database(s)", len(dbs))
+	log.Printf("🔄 Reload complete: project=%q databases=%d", s.currentProject, len(s.databases))
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"status":    "ok",
-		"databases": len(dbs),
+		"status":        "ok",
+		"project":       s.currentProject,
+		"projects":      len(s.projects),
+		"databaseCount": len(s.databases),
 	})
+}
+
+func (s *Server) reloadIntoCurrentProject() error {
+	if s.reloadFunc == nil {
+		return nil
+	}
+
+	s.mu.RLock()
+	preferredProject := s.currentProject
+	s.mu.RUnlock()
+
+	state, err := s.reloadFunc(preferredProject)
+	if err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	s.applyState(state)
+	s.mu.Unlock()
+	return nil
 }
 
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {
