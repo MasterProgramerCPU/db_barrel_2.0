@@ -30,10 +30,6 @@
                 <select id="project-select" class="project-select"></select>
             </label>
             <span id="db-count-badge" class="count-badge"></span>
-            <button id="delete-mode-btn" class="xp-btn danger-toggle-btn" title="Toggle delete mode" aria-pressed="false">
-                <span class="toggle-check" aria-hidden="true"></span>
-                <span class="toggle-label">Delete</span>
-            </button>
         </div>
     </header>
 
@@ -112,6 +108,10 @@
             </div>
         </div>
         <svg id="galaxy-svg"></svg>
+        <div id="trash-dropzone" class="trash-dropzone" hidden>
+            <span class="trash-dropzone-icon" aria-hidden="true">🗑</span>
+            <span class="trash-dropzone-label">Drop to delete</span>
+        </div>
     </div>
 
     <!-- Screen 2: Schema View -->

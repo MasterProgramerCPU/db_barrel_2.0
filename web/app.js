@@ -16,11 +16,11 @@
     const detailTableName = document.getElementById('detail-table-name');
     const detailContent = document.getElementById('detail-content');
     const closeDetailBtn = document.getElementById('close-detail');
-    const deleteModeBtn = document.getElementById('delete-mode-btn');
     const schemaSearch = document.getElementById('schema-search');
     const searchCount = document.getElementById('search-count');
     const searchClear = document.getElementById('search-clear');
     const toastEl = document.getElementById('toast');
+    const trashDropzone = document.getElementById('trash-dropzone');
     const addDbPanel = document.getElementById('add-db-panel');
     const addDbBody = document.getElementById('add-db-body');
     const toggleAddDbBtn = document.getElementById('toggle-add-db');
@@ -46,7 +46,9 @@
     let currentDbId = null;
     let currentProjectName = '';
     let galaxySim = null;
-    let deleteMode = false;
+    let holdTimer = null;
+    let holdDbId = null;
+    let holdActive = false;
 
     function normalizeName(v) {
         return String(v || '').trim().toLowerCase();
@@ -85,9 +87,9 @@
         galaxyScreen.classList.add('fade-in');
         currentDbLabel.textContent = currentProjectName || '';
         currentDbLabel.hidden = !currentProjectName;
-        deleteModeBtn.hidden = false;
         currentSchema = null;
         currentDbId = null;
+        resetTrashDropzone();
         detailOverlay.hidden = true;
         schemaSearch.value = '';
         searchCount.hidden = true;
@@ -102,7 +104,7 @@
         schemaScreen.classList.add('fade-in');
         currentDbLabel.textContent = currentProjectName ? `${currentProjectName} / ${name}` : name;
         currentDbLabel.hidden = false;
-        deleteModeBtn.hidden = true;
+        resetTrashDropzone();
     }
 
     logoHome.addEventListener('click', async () => {
@@ -140,16 +142,8 @@
 
     function setProjectBusy(isBusy) {
         projectSelect.disabled = isBusy;
-        deleteModeBtn.disabled = isBusy;
         addDbSubmitBtn.disabled = isBusy;
-    }
-
-    function setDeleteMode(isEnabled) {
-        deleteMode = Boolean(isEnabled);
-        deleteModeBtn.classList.toggle('is-active', deleteMode);
-        deleteModeBtn.setAttribute('aria-pressed', String(deleteMode));
-        deleteModeBtn.title = deleteMode ? 'Hide delete buttons' : 'Show delete buttons';
-        if (!galaxyScreen.hidden) renderGalaxy(databases);
+        if (isBusy) resetTrashDropzone();
     }
 
     function populateProjects() {
@@ -186,7 +180,6 @@
             const d = await r.json();
             if (!r.ok) throw new Error(d.error || 'Project switch failed');
             currentProjectName = d.project || targetName;
-            setDeleteMode(false);
             showToast(`✅ Loaded project "${currentProjectName}"`);
             await boot();
             showGallery();
@@ -228,9 +221,6 @@
     });
 
     dbDriverInput.addEventListener('change', updateAddDatabaseFormVisibility);
-    deleteModeBtn.addEventListener('click', () => {
-        setDeleteMode(!deleteMode);
-    });
 
     addDbForm.addEventListener('submit', async ev => {
         ev.preventDefault();
@@ -279,7 +269,6 @@
     });
 
     async function deleteDatabase(db) {
-        if (!window.confirm(`Delete database "${db.name}" from project "${currentProjectName}"?`)) return;
         setProjectBusy(true);
         try {
             const r = await fetch(`/api/databases/${db.id}`, { method: 'DELETE' });
@@ -294,6 +283,55 @@
         } finally {
             setProjectBusy(false);
         }
+    }
+
+    function armTrashDropzone(db) {
+        clearHoldTimer();
+        holdDbId = db.id;
+        holdTimer = window.setTimeout(() => {
+            holdActive = true;
+            db._suppressClick = true;
+            trashDropzone.hidden = false;
+        }, 1000);
+    }
+
+    function clearHoldTimer() {
+        if (holdTimer !== null) {
+            window.clearTimeout(holdTimer);
+            holdTimer = null;
+        }
+    }
+
+    function resetTrashDropzone() {
+        clearHoldTimer();
+        holdDbId = null;
+        holdActive = false;
+        trashDropzone.hidden = true;
+        trashDropzone.classList.remove('is-hot');
+    }
+
+    function isTrashDropActiveFor(db) {
+        return holdActive && holdDbId === db.id;
+    }
+
+    function pointerPayload(sourceEvent) {
+        if (!sourceEvent) return null;
+        if (sourceEvent.changedTouches && sourceEvent.changedTouches[0]) return sourceEvent.changedTouches[0];
+        if (sourceEvent.touches && sourceEvent.touches[0]) return sourceEvent.touches[0];
+        return sourceEvent;
+    }
+
+    function updateTrashHover(sourceEvent) {
+        if (trashDropzone.hidden) return false;
+        const pointer = pointerPayload(sourceEvent);
+        if (!pointer) return false;
+        const rect = trashDropzone.getBoundingClientRect();
+        const isHot = pointer.clientX >= rect.left
+            && pointer.clientX <= rect.right
+            && pointer.clientY >= rect.top
+            && pointer.clientY <= rect.bottom;
+        trashDropzone.classList.toggle('is-hot', isHot);
+        return isHot;
     }
 
     // ---- Load ----
@@ -322,6 +360,7 @@
                 currentDbLabel.textContent = currentProjectName || '';
                 currentDbLabel.hidden = !currentProjectName;
             }
+            resetTrashDropzone();
             renderGalaxy(databases);
         } catch (e) { console.error(e); }
     }
@@ -475,7 +514,7 @@
             .attr('transform', d => `translate(${d.x},${d.y})`);
 
         const nodeInner = nodeEls.append('g')
-            .attr('class', deleteMode ? 'db-node-inner is-delete-mode' : 'db-node-inner');
+            .attr('class', 'db-node-inner');
 
         // Card background
         nodeInner.append('rect')
@@ -536,26 +575,15 @@
 
         // Click
         nodeEls.filter(d => d.status === 'ok')
-            .on('click', (ev, d) => { ev.stopPropagation(); openDb(d); })
-            .style('cursor', 'pointer');
-
-        const deleteBtns = nodeInner.append('g')
-            .attr('class', 'node-delete-btn' + (deleteMode ? ' is-visible' : ''))
-            .attr('transform', `translate(${NODE_W / 2 - 18},${-18})`)
-            .style('cursor', deleteMode ? 'pointer' : 'default')
             .on('click', (ev, d) => {
-                if (!deleteMode) return;
                 ev.stopPropagation();
-                deleteDatabase(d);
-            });
-
-        deleteBtns.append('circle')
-            .attr('class', 'node-delete')
-            .attr('r', 9);
-        deleteBtns.append('text')
-            .attr('class', 'node-delete-label')
-            .attr('y', 3)
-            .text('X');
+                if (d._suppressClick) {
+                    d._suppressClick = false;
+                    return;
+                }
+                openDb(d);
+            })
+            .style('cursor', 'pointer');
 
         // Force
         galaxySim = d3.forceSimulation(nodes)
@@ -590,10 +618,49 @@
 
         updateMachineBorders();
 
+        nodeEls
+            .on('pointerdown', (ev, d) => {
+                if (ev.button !== undefined && ev.button !== 0) return;
+                d._dragMoved = false;
+                resetTrashDropzone();
+                armTrashDropzone(d);
+            })
+            .on('pointerup pointercancel', (ev, d) => {
+                if (d._dragMoved) return;
+                if (isTrashDropActiveFor(d)) {
+                    d._suppressClick = true;
+                }
+                resetTrashDropzone();
+            });
+
         const drag = d3.drag()
-            .on('start', (ev, d) => { if (!ev.active) galaxySim.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
-            .on('drag', (ev, d) => { d.fx = ev.x; d.fy = ev.y; })
-            .on('end', (ev, d) => { if (!ev.active) galaxySim.alphaTarget(0); d.fx = null; d.fy = null; });
+            .on('start', (ev, d) => {
+                if (!ev.active) galaxySim.alphaTarget(0.3).restart();
+                d.fx = d.x;
+                d.fy = d.y;
+            })
+            .on('drag', (ev, d) => {
+                d._dragMoved = true;
+                d.fx = ev.x;
+                d.fy = ev.y;
+                if (isTrashDropActiveFor(d)) {
+                    updateTrashHover(ev.sourceEvent);
+                } else {
+                    clearHoldTimer();
+                    trashDropzone.classList.remove('is-hot');
+                }
+            })
+            .on('end', (ev, d) => {
+                const shouldDelete = isTrashDropActiveFor(d) && updateTrashHover(ev.sourceEvent);
+                if (!ev.active) galaxySim.alphaTarget(0);
+                d.fx = null;
+                d.fy = null;
+                d._suppressClick = d._suppressClick || d._dragMoved || shouldDelete;
+                resetTrashDropzone();
+                if (shouldDelete) {
+                    deleteDatabase(d);
+                }
+            });
         nodeEls.call(drag);
 
         function updateMachineBorders() {
@@ -1079,6 +1146,6 @@
     function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
     updateAddDatabaseFormVisibility();
-    setDeleteMode(false);
+    resetTrashDropzone();
     boot();
 })();
