@@ -54,7 +54,7 @@ func LoadProjects(cfg config.ProjectCatalogConfig) ([]ProjectDefinition, error) 
 		if err != nil {
 			return nil, fmt.Errorf("catalog: project %q invalid barrel_configs value: %w", name, err)
 		}
-		projectCfg, err := config.Parse(payload)
+		projectCfg, err := parseProjectConfig(payload)
 		if err != nil {
 			return nil, fmt.Errorf("catalog: project %q invalid barrel_configs JSON: %w", name, err)
 		}
@@ -128,7 +128,7 @@ func mutateProjectConfig(cfg config.ProjectCatalogConfig, projectName string, mu
 	if err != nil {
 		return fmt.Errorf("catalog: project %q invalid barrel_configs value: %w", projectName, err)
 	}
-	projectCfg, err := config.Parse(payload)
+	projectCfg, err := parseProjectConfig(payload)
 	if err != nil {
 		return fmt.Errorf("catalog: project %q invalid barrel_configs JSON: %w", projectName, err)
 	}
@@ -200,7 +200,7 @@ func openCatalogDB(cfg config.ProjectCatalogConfig) (*sql.DB, string, string, st
 func rawJSONBytes(value any) ([]byte, error) {
 	switch v := value.(type) {
 	case nil:
-		return nil, fmt.Errorf("empty value")
+		return nil, nil
 	case []byte:
 		return append([]byte(nil), v...), nil
 	case string:
@@ -235,6 +235,30 @@ func placeholder(driverName string, index int) string {
 		return fmt.Sprintf("$%d", index)
 	}
 	return "?"
+}
+
+func parseProjectConfig(payload []byte) (*config.Config, error) {
+	trimmed := strings.TrimSpace(string(payload))
+	if trimmed == "" || trimmed == "null" || trimmed == "{}" {
+		return &config.Config{}, nil
+	}
+
+	projectCfg, err := config.Parse(payload)
+	if err == nil {
+		return projectCfg, nil
+	}
+
+	var rawCfg config.Config
+	if unmarshalErr := json.Unmarshal(payload, &rawCfg); unmarshalErr != nil {
+		return nil, unmarshalErr
+	}
+	if rawCfg.ProjectCatalog != nil {
+		return nil, fmt.Errorf("nested projectCatalog is not allowed")
+	}
+	if len(rawCfg.Databases) == 0 {
+		return &rawCfg, nil
+	}
+	return nil, err
 }
 
 func isSafeIdentifier(value string) bool {

@@ -133,3 +133,93 @@ func TestAppendAndRemoveDatabaseFromProjectSQLite(t *testing.T) {
 		t.Fatalf("unexpected databases after remove: %#v", projects[0].Config.Databases)
 	}
 }
+
+func TestLoadProjectsAllowsEmptyBarrelConfigs(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "catalog.db")
+
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer db.Close()
+
+	if _, err := db.Exec(`
+		CREATE TABLE projects (
+			name TEXT NOT NULL,
+			barrel_configs TEXT
+		)
+	`); err != nil {
+		t.Fatalf("create projects table: %v", err)
+	}
+
+	if _, err := db.Exec(`INSERT INTO projects(name, barrel_configs) VALUES (?, ?), (?, ?), (?, NULL)`, "Blank", "", "EmptyObject", "{}", "NullConfig"); err != nil {
+		t.Fatalf("insert projects: %v", err)
+	}
+
+	projects, err := LoadProjects(config.ProjectCatalogConfig{
+		Connection: config.DatabaseConfig{
+			Driver: "sqlite",
+			Path:   dbPath,
+		},
+	})
+	if err != nil {
+		t.Fatalf("LoadProjects: %v", err)
+	}
+
+	if len(projects) != 3 {
+		t.Fatalf("expected 3 projects, got %d", len(projects))
+	}
+	for _, project := range projects {
+		if len(project.Config.Databases) != 0 {
+			t.Fatalf("expected project %q to load with zero databases, got %#v", project.Name, project.Config.Databases)
+		}
+	}
+}
+
+func TestAppendDatabaseToEmptyProjectSQLite(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "catalog.db")
+
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer db.Close()
+
+	if _, err := db.Exec(`
+		CREATE TABLE projects (
+			name TEXT NOT NULL,
+			barrel_configs TEXT
+		)
+	`); err != nil {
+		t.Fatalf("create projects table: %v", err)
+	}
+
+	if _, err := db.Exec(`INSERT INTO projects(name, barrel_configs) VALUES (?, NULL)`, "EmptyProject"); err != nil {
+		t.Fatalf("insert project: %v", err)
+	}
+
+	catalogCfg := config.ProjectCatalogConfig{
+		Connection: config.DatabaseConfig{
+			Driver: "sqlite",
+			Path:   dbPath,
+		},
+	}
+
+	if err := AppendDatabaseToProject(catalogCfg, "EmptyProject", config.DatabaseConfig{
+		Name:   "SeedDB",
+		Driver: "sqlite",
+		Path:   filepath.Join(tmpDir, "seed.db"),
+	}); err != nil {
+		t.Fatalf("AppendDatabaseToProject: %v", err)
+	}
+
+	projects, err := LoadProjects(catalogCfg)
+	if err != nil {
+		t.Fatalf("LoadProjects: %v", err)
+	}
+	if len(projects) != 1 || len(projects[0].Config.Databases) != 1 || projects[0].Config.Databases[0].Name != "SeedDB" {
+		t.Fatalf("unexpected loaded project after append: %#v", projects)
+	}
+}
