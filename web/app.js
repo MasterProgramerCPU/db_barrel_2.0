@@ -21,8 +21,10 @@
     const searchClear = document.getElementById('search-clear');
     const toastEl = document.getElementById('toast');
     const trashDropzone = document.getElementById('trash-dropzone');
+    const trashDropzoneIcon = trashDropzone.querySelector('.trash-dropzone-icon');
     const addDbPanel = document.getElementById('add-db-panel');
     const addDbBody = document.getElementById('add-db-body');
+    const addDbTitlebar = addDbPanel.querySelector('.xp-dialog-titlebar');
     const toggleAddDbBtn = document.getElementById('toggle-add-db');
     const addDbForm = document.getElementById('add-db-form');
     const addDbSubmitBtn = document.getElementById('add-db-submit');
@@ -49,6 +51,7 @@
     let holdTimer = null;
     let holdDbId = null;
     let holdActive = false;
+    let panelDragCleanup = null;
 
     function normalizeName(v) {
         return String(v || '').trim().toLowerCase();
@@ -220,6 +223,46 @@
         toggleAddDbBtn.setAttribute('aria-expanded', String(!collapsed));
     });
 
+    addDbTitlebar.addEventListener('pointerdown', ev => {
+        if (ev.target.closest('button, input, select, textarea, label')) return;
+        if (ev.button !== undefined && ev.button !== 0) return;
+
+        ev.preventDefault();
+        const panelRect = addDbPanel.getBoundingClientRect();
+        const offsetX = ev.clientX - panelRect.left;
+        const offsetY = ev.clientY - panelRect.top;
+
+        if (panelDragCleanup) panelDragCleanup();
+        addDbPanel.classList.add('is-dragging');
+        addDbPanel.style.right = 'auto';
+
+        const move = moveEv => {
+            const nextLeft = Math.min(
+                Math.max(8, moveEv.clientX - offsetX),
+                Math.max(8, window.innerWidth - addDbPanel.offsetWidth - 8)
+            );
+            const nextTop = Math.min(
+                Math.max(8, moveEv.clientY - offsetY),
+                Math.max(8, window.innerHeight - addDbPanel.offsetHeight - 8)
+            );
+            addDbPanel.style.left = `${nextLeft}px`;
+            addDbPanel.style.top = `${nextTop}px`;
+        };
+
+        const stop = () => {
+            addDbPanel.classList.remove('is-dragging');
+            window.removeEventListener('pointermove', move);
+            window.removeEventListener('pointerup', stop);
+            window.removeEventListener('pointercancel', stop);
+            panelDragCleanup = null;
+        };
+
+        panelDragCleanup = stop;
+        window.addEventListener('pointermove', move);
+        window.addEventListener('pointerup', stop);
+        window.addEventListener('pointercancel', stop);
+    });
+
     dbDriverInput.addEventListener('change', updateAddDatabaseFormVisibility);
 
     addDbForm.addEventListener('submit', async ev => {
@@ -291,7 +334,8 @@
         holdTimer = window.setTimeout(() => {
             holdActive = true;
             db._suppressClick = true;
-            trashDropzone.hidden = false;
+            trashDropzone.classList.add('is-visible');
+            trashDropzone.setAttribute('aria-hidden', 'false');
         }, 1000);
     }
 
@@ -306,32 +350,25 @@
         clearHoldTimer();
         holdDbId = null;
         holdActive = false;
-        trashDropzone.hidden = true;
+        trashDropzone.classList.remove('is-visible');
         trashDropzone.classList.remove('is-hot');
+        trashDropzone.setAttribute('aria-hidden', 'true');
     }
 
     function isTrashDropActiveFor(db) {
         return holdActive && holdDbId === db.id;
     }
 
-    function pointerPayload(sourceEvent) {
-        if (!sourceEvent) return null;
-        if (sourceEvent.changedTouches && sourceEvent.changedTouches[0]) return sourceEvent.changedTouches[0];
-        if (sourceEvent.touches && sourceEvent.touches[0]) return sourceEvent.touches[0];
-        return sourceEvent;
-    }
-
-    function updateTrashHover(sourceEvent) {
-        if (trashDropzone.hidden) return false;
-        const pointer = pointerPayload(sourceEvent);
-        if (!pointer) return false;
-        const rect = trashDropzone.getBoundingClientRect();
-        const isHot = pointer.clientX >= rect.left
-            && pointer.clientX <= rect.right
-            && pointer.clientY >= rect.top
-            && pointer.clientY <= rect.bottom;
-        trashDropzone.classList.toggle('is-hot', isHot);
-        return isHot;
+    function nodeTouchesTrash(nodeElement) {
+        if (!trashDropzone.classList.contains('is-visible')) return false;
+        const nodeRect = nodeElement.getBoundingClientRect();
+        const trashRect = trashDropzoneIcon.getBoundingClientRect();
+        const intersects = nodeRect.left <= trashRect.right
+            && nodeRect.right >= trashRect.left
+            && nodeRect.top <= trashRect.bottom
+            && nodeRect.bottom >= trashRect.top;
+        trashDropzone.classList.toggle('is-hot', intersects);
+        return intersects;
     }
 
     // ---- Load ----
@@ -639,19 +676,19 @@
                 d.fx = d.x;
                 d.fy = d.y;
             })
-            .on('drag', (ev, d) => {
+            .on('drag', function (ev, d) {
                 d._dragMoved = true;
                 d.fx = ev.x;
                 d.fy = ev.y;
                 if (isTrashDropActiveFor(d)) {
-                    updateTrashHover(ev.sourceEvent);
+                    nodeTouchesTrash(this);
                 } else {
                     clearHoldTimer();
                     trashDropzone.classList.remove('is-hot');
                 }
             })
-            .on('end', (ev, d) => {
-                const shouldDelete = isTrashDropActiveFor(d) && updateTrashHover(ev.sourceEvent);
+            .on('end', function (ev, d) {
+                const shouldDelete = isTrashDropActiveFor(d) && nodeTouchesTrash(this);
                 if (!ev.active) galaxySim.alphaTarget(0);
                 d.fx = null;
                 d.fy = null;

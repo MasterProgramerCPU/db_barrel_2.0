@@ -257,18 +257,30 @@ body {
     color: #6B1E1E;
     pointer-events: none;
     z-index: 30;
+    opacity: 0;
+    transform: translateY(18px) scale(0.84) rotate(-6deg);
+    transform-origin: bottom right;
+    transition: opacity 0.2s ease, transform 0.22s cubic-bezier(0.2, 0.9, 0.2, 1), box-shadow 0.18s ease, background 0.18s ease, border-color 0.18s ease;
+}
+
+.trash-dropzone.is-visible {
+    opacity: 1;
+    transform: translateY(0) scale(1) rotate(0deg);
 }
 
 .trash-dropzone.is-hot {
     border-color: #8E1111;
     background: linear-gradient(180deg, rgba(255,232,232,0.98) 0%, rgba(231,168,168,0.98) 100%);
     box-shadow: 0 18px 40px rgba(142,17,17,0.28);
-    transform: scale(1.03);
+    transform: translateY(-2px) scale(1.06) rotate(-2deg);
 }
 
 .trash-dropzone-icon {
-    font-size: 34px;
-    line-height: 1;
+    width: 54px;
+    height: 54px;
+    object-fit: contain;
+    user-select: none;
+    -webkit-user-drag: none;
 }
 
 .trash-dropzone-label {
@@ -699,6 +711,7 @@ body {
     left: 18px;
     right: auto;
     width: 356px;
+    min-width: 220px;
     max-height: calc(100vh - var(--header-height) - 36px);
     z-index: 220;
     border-color: #2E63B8;
@@ -707,10 +720,20 @@ body {
 
 .add-db-panel .xp-dialog-titlebar {
     background: linear-gradient(180deg, #2C8AF8 0%, #1367D6 48%, #0B51B4 100%);
+    cursor: grab;
+}
+
+.add-db-panel.is-dragging .xp-dialog-titlebar {
+    cursor: grabbing;
 }
 
 .add-db-panel.is-collapsed .add-db-body {
     display: none;
+}
+
+.add-db-panel.is-collapsed {
+    width: 220px;
+    max-height: 42px;
 }
 
 .add-db-body {
