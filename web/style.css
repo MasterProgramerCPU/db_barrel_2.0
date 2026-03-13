@@ -243,24 +243,17 @@ body {
     position: absolute;
     right: 22px;
     bottom: 22px;
-    width: 118px;
-    min-height: 118px;
-    border: 2px dashed rgba(122, 29, 29, 0.75);
-    border-radius: 20px;
-    background: linear-gradient(180deg, rgba(255,248,248,0.96) 0%, rgba(241,219,219,0.96) 100%);
-    box-shadow: 0 14px 30px rgba(0,0,0,0.16);
+    width: 132px;
+    height: 132px;
     display: flex;
-    flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 6px;
-    color: #6B1E1E;
     pointer-events: none;
     z-index: 30;
     opacity: 0;
     transform: translateY(18px) scale(0.84) rotate(-6deg);
     transform-origin: bottom right;
-    transition: opacity 0.2s ease, transform 0.22s cubic-bezier(0.2, 0.9, 0.2, 1), box-shadow 0.18s ease, background 0.18s ease, border-color 0.18s ease;
+    transition: opacity 0.2s ease, transform 0.22s cubic-bezier(0.2, 0.9, 0.2, 1), filter 0.18s ease;
 }
 
 .trash-dropzone.is-visible {
@@ -269,25 +262,16 @@ body {
 }
 
 .trash-dropzone.is-hot {
-    border-color: #8E1111;
-    background: linear-gradient(180deg, rgba(255,232,232,0.98) 0%, rgba(231,168,168,0.98) 100%);
-    box-shadow: 0 18px 40px rgba(142,17,17,0.28);
     transform: translateY(-2px) scale(1.06) rotate(-2deg);
+    filter: drop-shadow(0 14px 22px rgba(142,17,17,0.28));
 }
 
 .trash-dropzone-icon {
-    width: 54px;
-    height: 54px;
+    width: 104px;
+    height: 104px;
     object-fit: contain;
     user-select: none;
     -webkit-user-drag: none;
-}
-
-.trash-dropzone-label {
-    font-size: 11px;
-    font-weight: bold;
-    text-transform: uppercase;
-    letter-spacing: 0.4px;
 }
 
 /* ---- Schema toolbar (search) ---- */
