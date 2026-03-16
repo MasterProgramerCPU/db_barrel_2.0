@@ -8,10 +8,15 @@
 
     const galaxyScreen = document.getElementById('galaxy-screen');
     const schemaScreen = document.getElementById('schema-screen');
+    const appHeader = document.getElementById('app-header');
     const logoHome = document.getElementById('logo-home');
     const currentDbLabel = document.getElementById('current-db-name');
     const projectSelect = document.getElementById('project-select');
     const dbCountBadge = document.getElementById('db-count-badge');
+    const toggleThemeBtn = document.getElementById('toggle-theme');
+    const themeToggleIcon = document.getElementById('theme-toggle-icon');
+    const toggleHeaderBtn = document.getElementById('toggle-header');
+    const restoreHeaderBtn = document.getElementById('restore-header');
     const detailOverlay = document.getElementById('detail-overlay');
     const detailTableName = document.getElementById('detail-table-name');
     const detailContent = document.getElementById('detail-content');
@@ -40,6 +45,8 @@
     const dbPathInput = document.getElementById('db-path-input');
     const saveLabelDefault = 'Save';
     const saveLabelBusy = 'Saving...';
+    const headerCollapsedStorageKey = 'dbbarrel.headerCollapsed';
+    const themeStorageKey = 'dbbarrel.theme';
 
     let projects = [];
     let databases = [];
@@ -66,13 +73,50 @@
 
     // XP DB type colors
     const DB_CLR = {
-        postgresql: { fill: '#B8D4F0', stroke: '#336791', text: '#003366', hdr: 'linear-gradient(180deg, #4A8CC7 0%, #336791 100%)' },
-        mysql: { fill: '#FFF0D0', stroke: '#F29111', text: '#8B4500', hdr: 'linear-gradient(180deg, #F5A623 0%, #F29111 100%)' },
-        mariadb: { fill: '#F0E0D4', stroke: '#C0765A', text: '#5E3322', hdr: 'linear-gradient(180deg, #D4896A 0%, #C0765A 100%)' },
-        sqlite: { fill: '#D0E8F8', stroke: '#4F9CD0', text: '#1A4970', hdr: 'linear-gradient(180deg, #6AB0DC 0%, #4F9CD0 100%)' },
+        light: {
+            postgresql: { fill: '#B8D4F0', stroke: '#336791', text: '#003366' },
+            mysql: { fill: '#FFF0D0', stroke: '#F29111', text: '#8B4500' },
+            mariadb: { fill: '#F0E0D4', stroke: '#C0765A', text: '#5E3322' },
+            sqlite: { fill: '#D0E8F8', stroke: '#4F9CD0', text: '#1A4970' },
+        },
+        dark: {
+            postgresql: { fill: '#13233A', stroke: '#58A6FF', text: '#CDE3FF' },
+            mysql: { fill: '#221B12', stroke: '#F6AD55', text: '#FFE0AE' },
+            mariadb: { fill: '#20171A', stroke: '#F58F7C', text: '#FFD7CE' },
+            sqlite: { fill: '#122536', stroke: '#4FC3F7', text: '#C8EEFF' },
+        },
     };
-    const DEF_CLR = { fill: '#E0E0E0', stroke: '#888', text: '#333', hdr: '#888' };
-    function clr(d) { return DB_CLR[d] || DEF_CLR; }
+    const DEF_CLR = {
+        light: { fill: '#E0E0E0', stroke: '#888', text: '#333' },
+        dark: { fill: '#16243A', stroke: '#5A76A5', text: '#D8E5FF' },
+    };
+    const DIAGRAM_THEME = {
+        light: {
+            tableHeaders: ['#2663C9', '#2E8B57', '#D4782F', '#7B4BB3', '#1A8A8A', '#C0392B'],
+            dbHeaders: ['#2663C9', '#2E8B57', '#D4782F', '#7B4BB3', '#1A8A8A', '#C0392B', '#E67E22', '#8E44AD'],
+            fk: '#0054E3',
+            repl: '#9333EA',
+        },
+        dark: {
+            tableHeaders: ['#3B82F6', '#14B8A6', '#F59E0B', '#A78BFA', '#38BDF8', '#F97316'],
+            dbHeaders: ['#3B82F6', '#22C55E', '#F59E0B', '#A78BFA', '#06B6D4', '#F97316', '#10B981', '#8B5CF6'],
+            fk: '#5BA7FF',
+            repl: '#AD8BFF',
+        },
+    };
+
+    function activeThemeKey() {
+        return document.body.classList.contains('dark-theme') ? 'dark' : 'light';
+    }
+
+    function clr(d) {
+        const key = activeThemeKey();
+        return DB_CLR[key][d] || DEF_CLR[key];
+    }
+
+    function currentDiagramTheme() {
+        return DIAGRAM_THEME[activeThemeKey()];
+    }
 
     // ---- Toast ----
     let toastTimer = null;
@@ -81,6 +125,90 @@
         toastEl.hidden = false;
         clearTimeout(toastTimer);
         toastTimer = setTimeout(() => { toastEl.hidden = true; }, 2500);
+    }
+
+    function rerenderVisibleView() {
+        if (!schemaScreen.hidden && currentSchema) {
+            renderSchema(currentSchema);
+            return;
+        }
+        renderGalaxy(databases);
+    }
+
+    function syncThemeControls() {
+        const dark = activeThemeKey() === 'dark';
+        toggleThemeBtn.setAttribute('aria-pressed', String(dark));
+        toggleThemeBtn.setAttribute('aria-label', dark ? 'Switch to light mode' : 'Switch to dark mode');
+        toggleThemeBtn.setAttribute('title', dark ? 'Switch to light mode' : 'Switch to dark mode');
+        themeToggleIcon.textContent = dark ? '☀' : '☾';
+    }
+
+    function setTheme(theme, options) {
+        const settings = Object.assign({ persist: true, rerender: true }, options || {});
+        const dark = theme === 'dark';
+        document.body.classList.toggle('dark-theme', dark);
+        syncThemeControls();
+
+        if (settings.persist) {
+            try {
+                window.localStorage.setItem(themeStorageKey, dark ? 'dark' : 'light');
+            } catch (err) {
+                console.warn('theme state was not persisted', err);
+            }
+        }
+
+        if (settings.rerender) {
+            requestAnimationFrame(() => rerenderVisibleView());
+        }
+    }
+
+    function loadThemePreference() {
+        try {
+            const stored = window.localStorage.getItem(themeStorageKey);
+            if (stored === 'dark' || stored === 'light') return stored;
+            return 'dark';
+        } catch (err) {
+            console.warn('theme state could not be restored', err);
+            return 'dark';
+        }
+    }
+
+    function syncHeaderControls() {
+        const collapsed = document.body.classList.contains('header-collapsed');
+        toggleHeaderBtn.setAttribute('aria-pressed', String(collapsed));
+        toggleHeaderBtn.setAttribute('title', collapsed ? 'Top bar hidden' : 'Collapse top bar');
+        restoreHeaderBtn.setAttribute('aria-hidden', String(!collapsed));
+        appHeader.setAttribute('aria-hidden', String(collapsed));
+    }
+
+    function setHeaderCollapsed(collapsed, options) {
+        const settings = Object.assign({ persist: true, rerender: true }, options || {});
+        document.body.classList.toggle('header-collapsed', collapsed);
+        syncHeaderControls();
+
+        if (settings.persist) {
+            try {
+                window.localStorage.setItem(headerCollapsedStorageKey, collapsed ? '1' : '0');
+            } catch (err) {
+                console.warn('header collapse state was not persisted', err);
+            }
+        }
+
+        if (settings.rerender) {
+            requestAnimationFrame(() => rerenderVisibleView());
+        }
+    }
+
+    function loadHeaderCollapsedPreference() {
+        try {
+            const stored = window.localStorage.getItem(headerCollapsedStorageKey);
+            if (stored === '1') return true;
+            if (stored === '0') return false;
+            return true;
+        } catch (err) {
+            console.warn('header collapse state could not be restored', err);
+            return true;
+        }
     }
 
     // ---- Navigation ----
@@ -113,6 +241,18 @@
     logoHome.addEventListener('click', async () => {
         showGallery();
         await performReload({ reopenCurrent: false, showToastMessage: true });
+    });
+
+    toggleHeaderBtn.addEventListener('click', () => {
+        setHeaderCollapsed(true);
+    });
+
+    restoreHeaderBtn.addEventListener('click', () => {
+        setHeaderCollapsed(false);
+    });
+
+    toggleThemeBtn.addEventListener('click', () => {
+        setTheme(activeThemeKey() === 'dark' ? 'light' : 'dark');
     });
 
     async function performReload(options) {
@@ -411,6 +551,7 @@
         const H = el.clientHeight || (window.innerHeight - 54);
 
         const svg = d3.select('#galaxy-svg').attr('viewBox', [0, 0, W, H]);
+        const theme = currentDiagramTheme();
 
         // Drop shadow filter
         const defs = svg.append('defs');
@@ -421,7 +562,7 @@
         // Replication arrow marker
         defs.append('marker').attr('id', 'repl-arr').attr('viewBox', '0 -5 10 10')
             .attr('refX', 8).attr('refY', 0).attr('markerWidth', 8).attr('markerHeight', 8).attr('orient', 'auto')
-            .append('path').attr('d', 'M0,-5L10,0L0,5').attr('fill', '#9333EA').attr('fill-opacity', 0.6);
+            .append('path').attr('d', 'M0,-5L10,0L0,5').attr('fill', theme.repl).attr('fill-opacity', 0.75);
 
         const root = svg.append('g');
 
@@ -776,6 +917,7 @@
 
         const svg = d3.select('#schema-svg').attr('viewBox', [0, 0, W, H]);
         const defs = svg.append('defs');
+        const theme = currentDiagramTheme();
 
         // Shadow
         const sf = defs.append('filter').attr('id', 'tshadow')
@@ -785,10 +927,10 @@
         // Arrow
         defs.append('marker').attr('id', 'arr').attr('viewBox', '0 -5 10 10')
             .attr('refX', 8).attr('refY', 0).attr('markerWidth', 7).attr('markerHeight', 7).attr('orient', 'auto')
-            .append('path').attr('d', 'M0,-5L10,0L0,5').attr('fill', '#0054E3').attr('fill-opacity', 0.5);
+            .append('path').attr('d', 'M0,-5L10,0L0,5').attr('fill', theme.fk).attr('fill-opacity', 0.7);
 
         // Table color palette
-        const TABLE_COLORS = ['#2663C9', '#2E8B57', '#D4782F', '#7B4BB3', '#1A8A8A', '#C0392B'];
+        const TABLE_COLORS = theme.tableHeaders;
         const numColors = TABLE_COLORS.length;
 
         const root = svg.append('g');
@@ -807,7 +949,7 @@
         });
 
         // Database color palette.
-        const DB_COLORS = ['#2663C9', '#2E8B57', '#D4782F', '#7B4BB3', '#1A8A8A', '#C0392B', '#E67E22', '#8E44AD'];
+        const DB_COLORS = theme.dbHeaders;
 
         const dbCenters = new Map();
         const dbCount = Math.max(dbNames.length, 1);
@@ -1184,5 +1326,7 @@
 
     updateAddDatabaseFormVisibility();
     resetTrashDropzone();
+    setTheme(loadThemePreference(), { persist: false, rerender: false });
+    setHeaderCollapsed(loadHeaderCollapsedPreference(), { persist: false, rerender: false });
     boot();
 })();
