@@ -117,7 +117,7 @@ body.dark-theme {
     --shadow-dialog: 0 28px 52px rgba(2,8,22,0.48);
     --canvas-bg: #0c1425;
     --canvas-dot: #234267;
-    --canvas-logo-opacity: 0.06;
+    --canvas-logo-opacity: 0.05;
     --header-bg: #0f1728;
     --header-border: #1a253a;
     --header-text-dim: #d5e1f7;
@@ -383,7 +383,7 @@ body.header-collapsed .collapsed-toolbar {
 }
 
 body.dark-theme .screen::before {
-    filter: sepia(1) hue-rotate(150deg) saturate(0.55) brightness(0.24) contrast(1.05);
+    filter: grayscale(100%) brightness(0) invert(1);
 }
 
 body.dark-theme #app-header {

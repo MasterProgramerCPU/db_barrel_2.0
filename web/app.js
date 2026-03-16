@@ -17,7 +17,6 @@
     const themeToggleIcon = document.getElementById('theme-toggle-icon');
     const toggleHeaderBtn = document.getElementById('toggle-header');
     const collapsedToolbar = document.getElementById('collapsed-toolbar');
-    const collapsedAddDbBtn = document.getElementById('toggle-add-db-collapsed');
     const restoreHeaderBtn = document.getElementById('restore-header');
     const detailOverlay = document.getElementById('detail-overlay');
     const detailTableName = document.getElementById('detail-table-name');
@@ -130,7 +129,6 @@
     function setAddDbDropdownOpen(open) {
         addDbDropdown.hidden = !open;
         toggleAddDbBtn.setAttribute('aria-expanded', String(open));
-        collapsedAddDbBtn.setAttribute('aria-expanded', String(open));
     }
 
     function rerenderVisibleView() {
@@ -290,7 +288,6 @@
     function setProjectBusy(isBusy) {
         projectSelect.disabled = isBusy;
         toggleAddDbBtn.disabled = isBusy;
-        collapsedAddDbBtn.disabled = isBusy;
         addDbSubmitBtn.disabled = isBusy;
         if (isBusy) {
             resetTrashDropzone();
@@ -370,14 +367,9 @@
         setAddDbDropdownOpen(addDbDropdown.hidden);
     });
 
-    collapsedAddDbBtn.addEventListener('click', ev => {
-        ev.stopPropagation();
-        setAddDbDropdownOpen(addDbDropdown.hidden);
-    });
-
     document.addEventListener('click', ev => {
         if (addDbDropdown.hidden) return;
-        if (addDbDropdown.contains(ev.target) || toggleAddDbBtn.contains(ev.target) || collapsedAddDbBtn.contains(ev.target)) return;
+        if (addDbDropdown.contains(ev.target) || toggleAddDbBtn.contains(ev.target)) return;
         setAddDbDropdownOpen(false);
     });
 
