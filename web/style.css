@@ -56,6 +56,8 @@
     --table-card-border: #ACA899;
     --table-row-alt-bg: #F5F3EB;
     --table-divider-color: #ACA899;
+    --table-header-text: #FFFFFF;
+    --table-header-muted-text: rgba(255,255,255,0.7);
     --dialog-bg: #ECE9D8;
     --dialog-border: #0560D6;
     --dialog-titlebar-bg: linear-gradient(180deg, #1A7CF7 0%, #0560D6 40%, #0350B5 100%);
@@ -143,6 +145,8 @@ body.dark-theme {
     --table-card-border: #21314d;
     --table-row-alt-bg: #132038;
     --table-divider-color: #24324a;
+    --table-header-text: #eaf2ff;
+    --table-header-muted-text: rgba(223,234,255,0.72);
     --dialog-bg: #0f182b;
     --dialog-border: #1a2942;
     --dialog-titlebar-bg: #10192c;
@@ -350,22 +354,32 @@ body.header-collapsed #app-header {
 }
 
 .header-restore-btn {
+    min-width: 112px;
+    box-shadow: 0 6px 16px rgba(0,0,0,0.24);
+}
+
+.collapsed-toolbar {
     position: fixed;
     top: 12px;
     right: 14px;
     z-index: 260;
-    min-width: 112px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
     opacity: 0;
     transform: translateY(-12px);
     pointer-events: none;
-    box-shadow: 0 6px 16px rgba(0,0,0,0.24);
     transition: opacity 0.18s ease, transform 0.2s ease;
 }
 
-body.header-collapsed .header-restore-btn {
+body.header-collapsed .collapsed-toolbar {
     opacity: 1;
     transform: translateY(0);
     pointer-events: auto;
+}
+
+.collapsed-toolbar-btn {
+    min-width: 112px;
 }
 
 body.dark-theme .screen::before {
@@ -466,6 +480,7 @@ body.dark-theme .table-node:hover {
 
 body.dark-theme .table-node .table-bg {
     stroke-width: 1.2;
+    fill: #0f1829;
 }
 
 body.dark-theme .table-node.highlighted .table-bg {
@@ -477,6 +492,18 @@ body.dark-theme .table-node .column-type,
 body.dark-theme .db-node .node-host {
     color: var(--text-muted);
     fill: var(--text-muted);
+}
+
+body.dark-theme .table-node .column-name {
+    fill: #dbe7fb;
+}
+
+body.dark-theme .table-node .table-title {
+    fill: var(--table-header-text);
+}
+
+body.dark-theme .table-node .table-db-label {
+    fill: var(--table-header-muted-text);
 }
 
 body.dark-theme .xp-dialog {
@@ -913,7 +940,11 @@ body.dark-theme .floating-reload-btn {
     font-family: 'Tahoma', sans-serif;
     font-size: 11px;
     font-weight: bold;
-    fill: var(--text-white);
+    fill: var(--table-header-text);
+}
+
+.table-node .table-db-label {
+    fill: var(--table-header-muted-text);
 }
 
 .table-node .column-name {

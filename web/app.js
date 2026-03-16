@@ -16,6 +16,8 @@
     const toggleThemeBtn = document.getElementById('toggle-theme');
     const themeToggleIcon = document.getElementById('theme-toggle-icon');
     const toggleHeaderBtn = document.getElementById('toggle-header');
+    const collapsedToolbar = document.getElementById('collapsed-toolbar');
+    const collapsedAddDbBtn = document.getElementById('toggle-add-db-collapsed');
     const restoreHeaderBtn = document.getElementById('restore-header');
     const detailOverlay = document.getElementById('detail-overlay');
     const detailTableName = document.getElementById('detail-table-name');
@@ -79,9 +81,9 @@
         },
         dark: {
             postgresql: { fill: '#13233A', stroke: '#58A6FF', text: '#CDE3FF' },
-            mysql: { fill: '#221B12', stroke: '#F6AD55', text: '#FFE0AE' },
-            mariadb: { fill: '#20171A', stroke: '#F58F7C', text: '#FFD7CE' },
-            sqlite: { fill: '#122536', stroke: '#4FC3F7', text: '#C8EEFF' },
+            mysql: { fill: '#1d1a14', stroke: '#c99843', text: '#f0d7a7' },
+            mariadb: { fill: '#1d171b', stroke: '#cf7d70', text: '#f0ccc7' },
+            sqlite: { fill: '#112232', stroke: '#4ba7d6', text: '#c6e8f7' },
         },
     };
     const DEF_CLR = {
@@ -96,8 +98,8 @@
             repl: '#9333EA',
         },
         dark: {
-            tableHeaders: ['#3B82F6', '#14B8A6', '#F59E0B', '#A78BFA', '#38BDF8', '#F97316'],
-            dbHeaders: ['#3B82F6', '#22C55E', '#F59E0B', '#A78BFA', '#06B6D4', '#F97316', '#10B981', '#8B5CF6'],
+            tableHeaders: ['#1c4f93', '#15665d', '#8f6221', '#5e49a8', '#176b86', '#8b3f25'],
+            dbHeaders: ['#1c4f93', '#1b7b57', '#8f6221', '#5e49a8', '#176b86', '#8b3f25', '#1f8668', '#6547a8'],
             fk: '#5BA7FF',
             repl: '#AD8BFF',
         },
@@ -128,6 +130,7 @@
     function setAddDbDropdownOpen(open) {
         addDbDropdown.hidden = !open;
         toggleAddDbBtn.setAttribute('aria-expanded', String(open));
+        collapsedAddDbBtn.setAttribute('aria-expanded', String(open));
     }
 
     function rerenderVisibleView() {
@@ -181,7 +184,7 @@
         toggleHeaderBtn.setAttribute('aria-pressed', String(collapsed));
         toggleHeaderBtn.setAttribute('title', collapsed ? 'Top bar hidden' : 'Collapse top bar');
         restoreHeaderBtn.setAttribute('aria-hidden', String(!collapsed));
-        appHeader.setAttribute('aria-hidden', String(collapsed));
+        collapsedToolbar.setAttribute('aria-hidden', String(!collapsed));
     }
 
     function setHeaderCollapsed(collapsed, options) {
@@ -287,6 +290,7 @@
     function setProjectBusy(isBusy) {
         projectSelect.disabled = isBusy;
         toggleAddDbBtn.disabled = isBusy;
+        collapsedAddDbBtn.disabled = isBusy;
         addDbSubmitBtn.disabled = isBusy;
         if (isBusy) {
             resetTrashDropzone();
@@ -366,9 +370,14 @@
         setAddDbDropdownOpen(addDbDropdown.hidden);
     });
 
+    collapsedAddDbBtn.addEventListener('click', ev => {
+        ev.stopPropagation();
+        setAddDbDropdownOpen(addDbDropdown.hidden);
+    });
+
     document.addEventListener('click', ev => {
         if (addDbDropdown.hidden) return;
-        if (addDbDropdown.contains(ev.target) || toggleAddDbBtn.contains(ev.target)) return;
+        if (addDbDropdown.contains(ev.target) || toggleAddDbBtn.contains(ev.target) || collapsedAddDbBtn.contains(ev.target)) return;
         setAddDbDropdownOpen(false);
     });
 

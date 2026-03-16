@@ -14,7 +14,7 @@
 
 <body class="dark-theme header-collapsed">
     <!-- XP-style title bar -->
-    <header id="app-header" aria-hidden="true">
+    <header id="app-header">
         <div class="header-left">
             <div id="logo-home" class="logo-area">
                 <img src="svg/barrel.svg" alt="DB Barrel" class="logo-icon">
@@ -37,7 +37,10 @@
             <button id="toggle-header" class="xp-min-btn header-toggle-btn" type="button" aria-label="Collapse top bar" title="Collapse top bar">_</button>
         </div>
     </header>
-    <button id="restore-header" class="xp-btn header-restore-btn" type="button" aria-label="Show top bar" title="Show top bar" aria-hidden="true">Show Top Bar</button>
+    <div id="collapsed-toolbar" class="collapsed-toolbar" aria-hidden="false">
+        <button id="toggle-add-db-collapsed" class="xp-btn collapsed-toolbar-btn" type="button" aria-expanded="false" aria-controls="add-db-dropdown">Add Database</button>
+        <button id="restore-header" class="xp-btn collapsed-toolbar-btn header-restore-btn" type="button" aria-label="Show top bar" title="Show top bar" aria-hidden="true">Show Top Bar</button>
+    </div>
     <div id="add-db-dropdown" class="xp-dialog add-db-dropdown" hidden>
         <div class="add-db-body">
             <p class="add-db-intro">Add a database connection to the currently selected project. DB Barrel updates that project's <code>barrel_configs</code> JSON and reloads it immediately.</p>
