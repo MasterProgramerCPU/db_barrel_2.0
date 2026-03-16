@@ -115,9 +115,9 @@ body.dark-theme {
     --status-err: #ff6d87;
     --shadow-card: 0 14px 30px rgba(2,8,22,0.35);
     --shadow-dialog: 0 28px 52px rgba(2,8,22,0.48);
-    --canvas-bg: #0d1424;
-    --canvas-dot: #1b2841;
-    --canvas-logo-opacity: 0.022;
+    --canvas-bg: #0c1425;
+    --canvas-dot: #234267;
+    --canvas-logo-opacity: 0.06;
     --header-bg: #0f1728;
     --header-border: #1a253a;
     --header-text-dim: #d5e1f7;
@@ -383,7 +383,7 @@ body.header-collapsed .collapsed-toolbar {
 }
 
 body.dark-theme .screen::before {
-    filter: grayscale(100%) brightness(1.4);
+    filter: sepia(1) hue-rotate(150deg) saturate(0.55) brightness(0.24) contrast(1.05);
 }
 
 body.dark-theme #app-header {
@@ -558,8 +558,16 @@ body.dark-theme .floating-reload-btn {
     max-height: calc(100vh - var(--header-height) - 24px);
     z-index: 250;
     overflow: auto;
+    background: var(--dialog-bg);
+    border: 1px solid var(--dialog-border);
+    border-radius: 14px;
     border-color: var(--add-panel-border);
     box-shadow: var(--add-panel-shadow);
+    animation: slideInRight 0.16s ease-out;
+}
+
+body.header-collapsed .add-db-dropdown {
+    top: 58px;
 }
 
 /* ---- Screens ---- */
