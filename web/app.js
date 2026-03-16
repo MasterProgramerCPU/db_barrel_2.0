@@ -25,6 +25,7 @@
     const searchCount = document.getElementById('search-count');
     const searchClear = document.getElementById('search-clear');
     const toastEl = document.getElementById('toast');
+    const floatingReloadBtn = document.getElementById('floating-reload');
     const trashDropzone = document.getElementById('trash-dropzone');
     const trashDropzoneIcon = trashDropzone.querySelector('.trash-dropzone-icon');
     const addDbPanel = document.getElementById('add-db-panel');
@@ -253,6 +254,10 @@
 
     toggleThemeBtn.addEventListener('click', () => {
         setTheme(activeThemeKey() === 'dark' ? 'light' : 'dark');
+    });
+
+    floatingReloadBtn.addEventListener('click', async () => {
+        await performReload({ reopenCurrent: false, showToastMessage: true });
     });
 
     async function performReload(options) {
