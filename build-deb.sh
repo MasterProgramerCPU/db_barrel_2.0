@@ -5,7 +5,7 @@
 # ============================================================
 set -euo pipefail
 
-VERSION="2.0.0"
+VERSION="2.0.1"
 PKG_NAME="db-barrel"
 ARCH=$(dpkg --print-architecture 2>/dev/null || echo "amd64")
 

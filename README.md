@@ -35,7 +35,7 @@ nano databases.json
 
 ```bash
 ./build-deb.sh
-sudo dpkg -i db-barrel_2.0.0_amd64.deb
+sudo dpkg -i db-barrel_2.0.1_amd64.deb
 sudo nano /etc/db-barrel/databases.json
 sudo systemctl start db-barrel
 
