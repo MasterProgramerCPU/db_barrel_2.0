@@ -28,9 +28,7 @@
     const floatingReloadBtn = document.getElementById('floating-reload');
     const trashDropzone = document.getElementById('trash-dropzone');
     const trashDropzoneIcon = trashDropzone.querySelector('.trash-dropzone-icon');
-    const addDbPanel = document.getElementById('add-db-panel');
-    const addDbBody = document.getElementById('add-db-body');
-    const addDbTitlebar = addDbPanel.querySelector('.xp-dialog-titlebar');
+    const addDbDropdown = document.getElementById('add-db-dropdown');
     const toggleAddDbBtn = document.getElementById('toggle-add-db');
     const addDbForm = document.getElementById('add-db-form');
     const addDbSubmitBtn = document.getElementById('add-db-submit');
@@ -59,7 +57,6 @@
     let holdTimer = null;
     let holdDbId = null;
     let holdActive = false;
-    let panelDragCleanup = null;
 
     function normalizeName(v) {
         return String(v || '').trim().toLowerCase();
@@ -126,6 +123,11 @@
         toastEl.hidden = false;
         clearTimeout(toastTimer);
         toastTimer = setTimeout(() => { toastEl.hidden = true; }, 2500);
+    }
+
+    function setAddDbDropdownOpen(open) {
+        addDbDropdown.hidden = !open;
+        toggleAddDbBtn.setAttribute('aria-expanded', String(open));
     }
 
     function rerenderVisibleView() {
@@ -215,6 +217,7 @@
         currentDbId = null;
         resetTrashDropzone();
         detailOverlay.hidden = true;
+        setAddDbDropdownOpen(false);
         schemaSearch.value = '';
         searchCount.hidden = true;
         searchClear.hidden = true;
@@ -229,6 +232,7 @@
         currentDbLabel.textContent = currentProjectName ? `${currentProjectName} / ${name}` : name;
         currentDbLabel.hidden = false;
         resetTrashDropzone();
+        setAddDbDropdownOpen(false);
     }
 
     logoHome.addEventListener('click', async () => {
@@ -282,8 +286,12 @@
 
     function setProjectBusy(isBusy) {
         projectSelect.disabled = isBusy;
+        toggleAddDbBtn.disabled = isBusy;
         addDbSubmitBtn.disabled = isBusy;
-        if (isBusy) resetTrashDropzone();
+        if (isBusy) {
+            resetTrashDropzone();
+            setAddDbDropdownOpen(false);
+        }
     }
 
     function populateProjects() {
@@ -353,51 +361,15 @@
         }
     }
 
-    toggleAddDbBtn.addEventListener('click', () => {
-        const collapsed = addDbPanel.classList.toggle('is-collapsed');
-        addDbBody.hidden = collapsed;
-        toggleAddDbBtn.textContent = collapsed ? '+' : '_';
-        toggleAddDbBtn.setAttribute('aria-expanded', String(!collapsed));
+    toggleAddDbBtn.addEventListener('click', ev => {
+        ev.stopPropagation();
+        setAddDbDropdownOpen(addDbDropdown.hidden);
     });
 
-    addDbTitlebar.addEventListener('pointerdown', ev => {
-        if (ev.target.closest('button, input, select, textarea, label')) return;
-        if (ev.button !== undefined && ev.button !== 0) return;
-
-        ev.preventDefault();
-        const panelRect = addDbPanel.getBoundingClientRect();
-        const offsetX = ev.clientX - panelRect.left;
-        const offsetY = ev.clientY - panelRect.top;
-
-        if (panelDragCleanup) panelDragCleanup();
-        addDbPanel.classList.add('is-dragging');
-        addDbPanel.style.right = 'auto';
-
-        const move = moveEv => {
-            const nextLeft = Math.min(
-                Math.max(8, moveEv.clientX - offsetX),
-                Math.max(8, window.innerWidth - addDbPanel.offsetWidth - 8)
-            );
-            const nextTop = Math.min(
-                Math.max(8, moveEv.clientY - offsetY),
-                Math.max(8, window.innerHeight - addDbPanel.offsetHeight - 8)
-            );
-            addDbPanel.style.left = `${nextLeft}px`;
-            addDbPanel.style.top = `${nextTop}px`;
-        };
-
-        const stop = () => {
-            addDbPanel.classList.remove('is-dragging');
-            window.removeEventListener('pointermove', move);
-            window.removeEventListener('pointerup', stop);
-            window.removeEventListener('pointercancel', stop);
-            panelDragCleanup = null;
-        };
-
-        panelDragCleanup = stop;
-        window.addEventListener('pointermove', move);
-        window.addEventListener('pointerup', stop);
-        window.addEventListener('pointercancel', stop);
+    document.addEventListener('click', ev => {
+        if (addDbDropdown.hidden) return;
+        if (addDbDropdown.contains(ev.target) || toggleAddDbBtn.contains(ev.target)) return;
+        setAddDbDropdownOpen(false);
     });
 
     dbDriverInput.addEventListener('change', updateAddDatabaseFormVisibility);
@@ -437,6 +409,7 @@
             dbSSLModeInput.value = 'disable';
             updateAddDatabaseFormVisibility();
             showToast(`✅ Added database to project "${d.project || currentProjectName}"`);
+            setAddDbDropdownOpen(false);
             await boot();
             showGallery();
         } catch (e) {
@@ -911,6 +884,9 @@
         const el = document.getElementById('schema-svg');
         const W = el.clientWidth || window.innerWidth;
         const H = el.clientHeight || (window.innerHeight - 60);
+        const styles = window.getComputedStyle(document.body);
+        const tableRowAltBg = styles.getPropertyValue('--table-row-alt-bg').trim() || '#F5F3EB';
+        const tableDivider = styles.getPropertyValue('--table-divider-color').trim() || '#ACA899';
 
         const svg = d3.select('#schema-svg').attr('viewBox', [0, 0, W, H]);
         const defs = svg.append('defs');
@@ -1057,10 +1033,10 @@
             const fkc = new Set((td.foreignKeys || []).map(fk => fk.columnName));
             td.columns.forEach((col, ci) => {
                 const y = HDR + ci * ROW + ROW / 2 + 4;
-                if (ci === 0) g.append('line').attr('x1', 1).attr('x2', td.width - 1).attr('y1', HDR).attr('y2', HDR).attr('stroke', '#ACA899');
+                if (ci === 0) g.append('line').attr('x1', 1).attr('x2', td.width - 1).attr('y1', HDR).attr('y2', HDR).attr('stroke', tableDivider);
 
                 // Alternating row bg
-                if (ci % 2 === 1) g.append('rect').attr('x', 1).attr('y', HDR + ci * ROW).attr('width', td.width - 2).attr('height', ROW).attr('fill', '#F5F3EB');
+                if (ci % 2 === 1) g.append('rect').attr('x', 1).attr('y', HDR + ci * ROW).attr('width', td.width - 2).attr('height', ROW).attr('fill', tableRowAltBg);
 
                 if (col.isPrimaryKey) g.append('text').attr('class', 'column-icon pk').attr('x', PAD).attr('y', y).text('🔑');
                 else if (fkc.has(col.name)) g.append('text').attr('class', 'column-icon fk').attr('x', PAD).attr('y', y).text('🔗');
@@ -1323,6 +1299,7 @@
 
     updateAddDatabaseFormVisibility();
     resetTrashDropzone();
+    setAddDbDropdownOpen(false);
     setTheme(loadThemePreference(), { persist: false, rerender: false });
     setHeaderCollapsed(loadHeaderCollapsedPreference(), { persist: false, rerender: false });
     boot();
