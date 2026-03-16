@@ -201,15 +201,7 @@
     }
 
     function loadHeaderCollapsedPreference() {
-        try {
-            const stored = window.localStorage.getItem(headerCollapsedStorageKey);
-            if (stored === '1') return true;
-            if (stored === '0') return false;
-            return true;
-        } catch (err) {
-            console.warn('header collapse state could not be restored', err);
-            return true;
-        }
+        return true;
     }
 
     // ---- Navigation ----
